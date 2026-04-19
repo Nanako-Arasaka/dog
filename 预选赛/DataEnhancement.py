@@ -27,8 +27,8 @@ def mkdir(path):
         return False
 
 if __name__ == "__main__":
-    IMG_DIR = r"C:\Users\AT-austin\Desktop\The Dog\预选赛\data\train\high"  ### 原始数据集图像的路径
-    AUG_IMG_DIR = r"C:\Users\AT-austin\Desktop\The Dog\预选赛\data\train_enhanced\high"### 数据增强后图片的保存路径
+    IMG_DIR = r"C:\Users\AT-austin\Desktop\The Dog\预选赛\data\train\low"  ### 原始数据集图像的路径
+    AUG_IMG_DIR = r"C:\Users\AT-austin\Desktop\The Dog\预选赛\data\train_enhanced\low"### 数据增强后图片的保存路径
 
     try:
         shutil.rmtree(AUG_IMG_DIR)
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     transform = A.Compose([
         A.VerticalFlip(p=0.5),  # vertically flip 50% of all images
         A.HorizontalFlip(p=0.5),  # 镜像
-        A.RandomBrightness(limit=(0.1, 0.4), p=1.0),  # change brightness
+        A.RandomBrightnessContrast(brightness_limit=(0.1, 0.4), contrast_limit=0, p=1.0),  # change brightness
         A.GaussianBlur(blur_limit=(0, 7), p=1.0),  # apply Gaussian blur
         A.Affine(
             translate_percent={"x": 0.05, "y": 0.05},
@@ -61,9 +61,9 @@ if __name__ == "__main__":
             for epoch in range(AUGLOOP):
                 img = Image.open(os.path.join(IMG_DIR, name))
                 img = np.asarray(img)
-
+    
                 image_aug = transform(image=img)['image']
                 path = os.path.join(AUG_IMG_DIR, name[:-4] + str("_%06d" % (epoch + 1)) + '.jpg')
                 Image.fromarray(image_aug).save(path)
-
+    
                 print(name[:-4] + str("_%06d" % (epoch + 1)) + '.jpg')
