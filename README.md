@@ -1,2 +1,2 @@
 # dog
-This repository is supposed to complete a machine dog competition.
+This repository is for a machine dog competition.
