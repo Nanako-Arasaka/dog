@@ -1,0 +1,13 @@
+__pycache__/
+.vscode/
+checkpoints/
+data/
+video/
+*.docx
+*.pdf
+*.zip
+*.pth
+*.onnx
+*.engine
+*.ts
+camera_config.json

@@ -1,0 +1,12 @@
+__pycache__/
+.idea/
+*.zip
+*.pth
+*.onnx
+*.engine
+*.ts
+123456
+123456.pub
+yuxuansai/
+大赛文档/
+data/

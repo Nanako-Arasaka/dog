@@ -1,0 +1,21 @@
+{
+  "robot_ip": "192.168.1.120",
+  "robot_command_port": 43893,
+  "local_ip": "0.0.0.0",
+  "local_telemetry_port": 43897,
+  "heartbeat_hz": 2.0,
+  "main_loop_hz": 20.0,
+  "log_telemetry": true,
+  "scenario_file": "config/scenario_mock.json",
+  "speaker": {
+    "enabled": false,
+    "command_template": "echo \"{text}\""
+  },
+  "mission": {
+    "obstacle_forward_value": 12000,
+    "obstacle_turn_value": 0,
+    "obstacle_timeout_sec": 90,
+    "inspection_target_count": 4,
+    "max_drop_count": 3
+  }
+}
