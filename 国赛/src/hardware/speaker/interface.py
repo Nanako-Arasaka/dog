@@ -15,9 +15,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import threading
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -67,9 +69,10 @@ class AudioFileSpeaker(SpeakerGateway):
 
     def __init__(self, cfg: SpeakerConfig) -> None:
         self._cfg = cfg
-        self._audio_dir = Path(cfg.language) if cfg.language else Path("audio")
+        self._audio_dir = Path(cfg.audio_dir)
+        self._playback_log_path = Path(cfg.playback_log_path)
         self._active_thread: threading.Thread | None = None
-        self._player = cfg.engine  # "aplay" | "ffplay" | "powershell"
+        self._player = cfg.engine  # "mock" | "aplay" | "ffplay" | "powershell"
 
     def play(self, audio_key: str) -> None:
         logging.info("语音播报: key=%s", audio_key)
@@ -93,17 +96,23 @@ class AudioFileSpeaker(SpeakerGateway):
         fpath = self._audio_dir / fname
         if not fpath.exists():
             logging.warning("音频文件不存在: %s", fpath)
+            self._write_playback_log(audio_key, "missing_file", fpath)
             return
         try:
             self._run_player(str(fpath))
+            self._write_playback_log(audio_key, "played", fpath)
         except FileNotFoundError:
             logging.warning("音频播放器 %s 未安装", self._player)
+            self._write_playback_log(audio_key, "missing_player", fpath)
         except Exception as exc:
             logging.error("音频播放异常: %s", exc)
+            self._write_playback_log(audio_key, "error", fpath, str(exc))
 
     def _run_player(self, filepath: str) -> None:
         p = self._player
-        if p == "aplay":
+        if p == "mock":
+            logging.info("语音播报(mock file): %s", filepath)
+        elif p == "aplay":
             subprocess.run(["aplay", filepath], capture_output=True, timeout=10, check=False)
         elif p == "ffplay":
             subprocess.run(["ffplay", "-nodisp", "-autoexit", filepath],
@@ -114,6 +123,27 @@ class AudioFileSpeaker(SpeakerGateway):
                 capture_output=True, timeout=10, check=False)
         else:
             logging.warning("未知播放器: %s，跳过播放 %s", p, filepath)
+
+    def _write_playback_log(
+        self,
+        audio_key: str,
+        status: str,
+        fpath: Path,
+        error: str = "",
+    ) -> None:
+        if not self._cfg.save_playback_log:
+            return
+        record = {
+            "timestamp": time.time(),
+            "key": audio_key,
+            "status": status,
+            "path": str(fpath),
+        }
+        if error:
+            record["error"] = error
+        self._playback_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._playback_log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 # ── Mock 实现 ────────────────────────────────────────────

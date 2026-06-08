@@ -19,6 +19,7 @@
 - A/B/C/D 字母识别增强：模板自动生成、模板匹配、ROI/debug 图保存。
 - 仪表盘识别增强：表盘定位、指针角度估计、`low/normal/high` 状态判断。
 - 巡检结果融合：生成 `abnormal` 和 `speak_key`，例如 `A_low`、`B_normal`。
+- 语音播报闭环：`SpeakerGateway.play(key)` 播放 `output/audio/*.wav`，支持播放日志。
 - 远程感知、取流、固定检测、字母识别、仪表识别的测试脚本。
 
 未完成或仍需实机接入：
@@ -64,7 +65,8 @@
 ├─ tests
 └─ tools
    ├─ test_camera_input.py
-   └─ test_remote_perception_client.py
+   ├─ test_remote_perception_client.py
+   └─ test_speaker_playback.py
 ```
 
 ## 机器狗本地运行
@@ -233,12 +235,47 @@ assets/templates/letters/
 
 真实仪表盘上场前需要用 `output/debug_gauge/` 中的 ROI 和标注图继续调参。
 
+## 语音播报
+
+机器狗本地语音播放只消费 Mission 已经拿到的 `speak_key`，算力板和远程感知协议不负责播放。音频文件默认放在：
+
+```text
+output/audio/
+├─ A_low.wav
+├─ A_normal.wav
+├─ A_high.wav
+└─ ...
+```
+
+`config/robot_config.json` 中的语音配置：
+
+```json
+{
+  "speaker": {
+    "enabled": true,
+    "engine": "ffplay",
+    "language": "zh",
+    "audio_dir": "output/audio",
+    "save_playback_log": true,
+    "playback_log_path": "output/playback_log.jsonl"
+  }
+}
+```
+
+`engine` 可选 `mock`、`aplay`、`ffplay`、`powershell`。缺少音频文件、非法 key、播放器不可用都会降级为日志，不中断主流程。`say_async()` 仅作为 log fallback，关键播报应使用 `play(key)`。
+
 ## 测试
 
 相机输入测试：
 
 ```powershell
 python .\tools\test_camera_input.py
+```
+
+语音播放测试：
+
+```powershell
+python .\tools\test_speaker_playback.py --save-playback-log
 ```
 
 远程感知闭环测试：
@@ -264,6 +301,7 @@ python -m pytest -q
 - 固定检测结果可被 `RemotePerceptionGateway` 解析。
 - A/B/C/D 字母模板匹配、模板缺失自动生成、debug 图保存。
 - 巡检融合、`speak_key` 生成、低置信过滤。
+- 预录音频 `play(key)`、非法 key fallback、连续播放、播放日志。
 - 仪表盘 LOW/NORMAL/HIGH 角度分类。
 
 ## 部署到机器狗上位机

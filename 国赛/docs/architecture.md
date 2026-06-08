@@ -229,6 +229,41 @@ python .\vision_server.py --mode camera --source 0 --letter-debug-save-roi --let
 
 融合 debug 图会标注字母 bbox、仪表 bbox，以及 `zone + status + confidence`。
 
+## 语音播报闭环
+
+语音播报仍在机器狗本地执行，不进入算力板视觉服务。`poll_inspection()` 只输出 `speak_key`，Mission 按现有 `SpeakerGateway.play(key)` 调用播放。
+
+`AudioFileSpeaker` 当前按 key 映射本地 wav 文件：
+
+```text
+output/audio/A_low.wav
+output/audio/B_normal.wav
+output/audio/C_high.wav
+...
+```
+
+播放配置在 `speaker` 下：
+
+```json
+{
+  "enabled": true,
+  "engine": "ffplay",
+  "language": "zh",
+  "audio_dir": "output/audio",
+  "save_playback_log": true,
+  "playback_log_path": "output/playback_log.jsonl"
+}
+```
+
+实现约束：
+
+- `play(key)` 非阻塞启动播放线程。
+- `engine=mock` 只记录日志，适合 CI 和无声调试。
+- `engine=aplay/ffplay/powershell` 调用系统播放器。
+- 缺文件、非法 key、播放器不存在时只写 warning 和 playback log，不抛异常中断任务。
+- `say_async(text)` 仅作为 log fallback，不做 TTS 合成。
+- 播放日志为 JSON Lines，包含 `timestamp`、`key`、`status`、`path`。
+
 ## 仪表盘识别
 
 `detect_gauges()` 已从固定模拟结果升级为基础图像识别流程：
@@ -334,6 +369,12 @@ python .\tools\test_camera_input.py
 python .\tools\test_remote_perception_client.py
 ```
 
+语音播放闭环测试：
+
+```powershell
+python .\tools\test_speaker_playback.py --save-playback-log
+```
+
 完整 pytest：
 
 ```powershell
@@ -350,6 +391,7 @@ python -m pytest -q
 - 固定检测结构化输出。
 - A/B/C/D 字母模板匹配、模板自动生成、debug 图保存。
 - 巡检融合结果、`speak_key` 生成、低置信过滤、debug 图保存。
+- 预录音频 `play(key)`、非法 key fallback、连续播放、播放日志。
 - 仪表盘 LOW/NORMAL/HIGH 角度分类。
 - `RemotePerceptionGateway` 对检测 JSON 的解析。
 

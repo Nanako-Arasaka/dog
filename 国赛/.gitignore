@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+output/test_*/
+output/test_*.ppm
+output/debug_*/
+output/playback_log.jsonl

@@ -25,7 +25,10 @@
   "speaker": {
     "enabled": false,
     "engine": "mock",
-    "language": "audio"
+    "language": "zh",
+    "audio_dir": "output/audio",
+    "save_playback_log": false,
+    "playback_log_path": "output/playback_log.jsonl"
   },
   "mission": {
     "obstacle_timeout_sec": 90,

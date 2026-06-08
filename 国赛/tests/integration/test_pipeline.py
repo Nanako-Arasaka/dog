@@ -27,12 +27,10 @@ from runtime.controller import DogController, RuntimeConfig
 
 
 def _make_dog() -> DogController:
-    """用随机端口创建 DogController，避免测试间端口冲突。"""
-    import random
-    port = random.randint(50000, 60000)
+    """用系统分配端口创建 DogController，避免测试间端口冲突。"""
     return DogController(RuntimeConfig(
         robot_ip="127.0.0.1", robot_command_port=43893,
-        local_ip="0.0.0.0", local_telemetry_port=port,
+        local_ip="0.0.0.0", local_telemetry_port=0,
         heartbeat_hz=2.0, main_loop_hz=20.0, log_telemetry=False,
     ))
 
@@ -253,4 +251,3 @@ class TestRemotePerceptionTimeout:
 
         # obstacle_cleared 在无检测结果时应为 True（安全侧）
         assert gw.obstacle_cleared() is True
-

@@ -59,7 +59,10 @@ class SpeakerConfig:
 
     enabled: bool = False
     engine: str = "mock"  # "mock" | "aplay" | "ffplay" | "powershell"
-    language: str = "zh"  # 或音频目录路径
+    language: str = "zh"
+    audio_dir: str = "output/audio"
+    save_playback_log: bool = False
+    playback_log_path: str = "output/playback_log.jsonl"
 
 
 @dataclass(frozen=True)
@@ -197,6 +200,9 @@ def load_app_config(config_path: str | Path) -> AppConfig:
         enabled=_get_bool(speaker_data, "enabled", False),
         engine=_get_str(speaker_data, "engine", "mock"),
         language=_get_str(speaker_data, "language", "zh"),
+        audio_dir=_get_str(speaker_data, "audio_dir", "output/audio"),
+        save_playback_log=_get_bool(speaker_data, "save_playback_log", False),
+        playback_log_path=_get_str(speaker_data, "playback_log_path", "output/playback_log.jsonl"),
     )
 
     # 任务参数
