@@ -25,6 +25,7 @@ from core.types import (
     CameraIntrinsics,
     ConeDetection,
     EquipmentDetection,
+    GaugeReading,
     InspectionReading,
     JointAngles,
     MeterStatus,
@@ -34,7 +35,9 @@ from core.types import (
     Point3D,
     RobotPose,
     StripDetection,
+    TargetPose,
     Zone,
+    ZoneLetterResult,
 )
 
 __all__ = [
@@ -50,6 +53,9 @@ __all__ = [
     "ConeDetection",
     "EquipmentDetection",
     "StripDetection",
+    "ZoneLetterResult",
+    "GaugeReading",
+    "TargetPose",
     "RobotPose",
     "ArmPose",
     "JointAngles",

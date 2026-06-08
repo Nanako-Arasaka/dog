@@ -3,20 +3,19 @@
 按拓扑顺序组装所有组件：
   硬件层 → 感知层 / 导航层 → 任务层
 
-支持通过配置切换真实硬件 / mock 实现。
+支持通过配置切换 mock / local / remote 实现。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from app.config import AppConfig
 from hardware.arm.interface import ArmGateway
 from hardware.camera.interface import CameraGateway
 from hardware.speaker.interface import SpeakerGateway
 from mission.national_stage import NationalStageMission
-from mission.perception import JsonScenarioPerception, PerceptionGateway
+from mission.perception import PerceptionGateway
 from navigation.gateway import NavigationGateway
 from runtime.controller import DogController, RuntimeConfig
 
@@ -58,10 +57,8 @@ def _create_camera(cfg: AppConfig) -> CameraGateway:
     driver = cfg.camera.driver
     if driver == "mock":
         from hardware.camera.interface import MockCamera
-
         return MockCamera(cfg.camera)
     if driver == "realsense":
-        # 占位：RealSense 实现
         raise NotImplementedError("RealSense camera not yet implemented")
     raise ValueError(f"未知相机驱动: {driver}")
 
@@ -70,23 +67,16 @@ def _create_arm(cfg: AppConfig) -> ArmGateway:
     driver = cfg.arm.driver
     if driver == "mock" or driver == "":
         from hardware.arm.interface import MockArm
-
         return MockArm(cfg.arm)
-    # 占位：真实机械臂实现
     raise NotImplementedError(f"未知机械臂驱动: {driver}")
 
 
 def _create_speaker(cfg: AppConfig) -> SpeakerGateway:
-    engine = cfg.speaker.engine
-    if engine == "mock":
+    if not cfg.speaker.enabled:
         from hardware.speaker.interface import MockSpeaker
-
         return MockSpeaker(cfg.speaker)
-    if engine == "espeak":
-        from hardware.speaker.interface import EspeakSpeaker
-
-        return EspeakSpeaker(cfg.speaker)
-    raise ValueError(f"未知语音引擎: {engine}")
+    from hardware.speaker.interface import AudioFileSpeaker
+    return AudioFileSpeaker(cfg.speaker)
 
 
 def _create_dog_controller(cfg: AppConfig) -> DogController:
@@ -103,18 +93,32 @@ def _create_dog_controller(cfg: AppConfig) -> DogController:
 
 
 def _create_perception(cfg: AppConfig) -> PerceptionGateway:
-    """根据配置创建感知层实现。
+    """根据 perception.driver 创建感知实现。
 
-    规则：如果 scenario_file 非空 → Mock（JSON 仿真）；
-         否则根据 perception.driver 创建真实感知实现。
+    - "mock"   → JsonScenarioPerception (JSON 场景仿真)
+    - "local"  → LocalPerceptionGateway (本机 CV)
+    - "remote" → RemotePerceptionGateway (外接 NVIDIA 算力板)
     """
-    if cfg.perception.scenario_file:
-        from mission.perception import PerceptionConfig as PCfg
+    driver = cfg.perception.driver
 
+    if driver == "mock":
+        from mission.perception import PerceptionConfig as PCfg, JsonScenarioPerception
         pcfg = PCfg(scenario_file=cfg.perception.scenario_file)
         return JsonScenarioPerception(pcfg)
-    # 占位：真实感知实现
-    raise NotImplementedError("真实感知层尚未实现，请提供 scenario_file 使用仿真模式")
+
+    if driver == "local":
+        raise NotImplementedError("LocalPerceptionGateway 尚未实现")
+
+    if driver == "remote":
+        from perception.remote_gateway import RemotePerceptionConfig, RemotePerceptionGateway
+        rcfg = RemotePerceptionConfig(
+            host=cfg.remote_perception.host,
+            port=cfg.remote_perception.port,
+            timeout_sec=cfg.remote_perception.timeout_sec,
+        )
+        return RemotePerceptionGateway(rcfg)
+
+    raise ValueError(f"未知感知驱动: {driver}")
 
 
 def _create_navigation(
@@ -122,10 +126,5 @@ def _create_navigation(
     camera: CameraGateway,
     dog: DogController,
 ) -> NavigationGateway:
-    """创建导航层实现。
-
-    当前仅提供 mock 实现；后续对接视觉 SLAM / AprilTag。
-    """
     from navigation.gateway import MockNavigator
-
     return MockNavigator(camera, dog)

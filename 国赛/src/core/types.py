@@ -181,6 +181,48 @@ class StripDetection:
     bbox: BBox
     center_3d: tuple[float, float, float]  # 相机坐标系
     confidence: float
+    timestamp: float = 0.0
+
+
+@dataclass(frozen=True)
+class ZoneLetterResult:
+    """区域字母识别结果"""
+
+    zone: Zone
+    confidence: float
+    bbox: BBox | None = None
+    timestamp: float = 0.0
+
+
+@dataclass(frozen=True)
+class GaugeReading:
+    """仪表盘读数结果"""
+
+    zone: Zone
+    status: MeterStatus
+    confidence: float
+    raw_value: float | None = None
+    timestamp: float = 0.0
+
+    def broadcast_text(self) -> str:
+        return (
+            f"{self.zone.value}区域仪表盘显示{self.status.cn_display}"
+            f"，状态{self.status.cn_health}"
+        )
+
+
+@dataclass(frozen=True)
+class TargetPose:
+    """机械臂目标位姿估计（抓取/放置用）"""
+
+    x: float
+    y: float
+    z: float
+    roll: float = 0.0
+    pitch: float = 0.0
+    yaw: float = 0.0
+    confidence: float = 0.0
+    timestamp: float = 0.0
 
 
 # ── 位姿 ────────────────────────────────────────────────

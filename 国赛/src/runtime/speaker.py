@@ -1,14 +1,10 @@
-"""向后兼容 re-export —— Speaker 已迁移至 hardware.speaker。
-
-新代码请直接:
-    from hardware.speaker import SpeakerGateway, EspeakSpeaker, MockSpeaker
-"""
+"""向后兼容 re-export —— Speaker 已迁移至 hardware.speaker。"""
 
 from __future__ import annotations
 
-from hardware.speaker.interface import EspeakSpeaker, MockSpeaker, SpeakerGateway
+from hardware.speaker.interface import AudioFileSpeaker, MockSpeaker, SpeakerGateway
 
-# 保留旧的 Speaker 别名
-Speaker = EspeakSpeaker
+# 旧别名
+Speaker = AudioFileSpeaker
 
-__all__ = ["SpeakerGateway", "Speaker", "EspeakSpeaker", "MockSpeaker"]
+__all__ = ["SpeakerGateway", "Speaker", "AudioFileSpeaker", "MockSpeaker"]

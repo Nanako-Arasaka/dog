@@ -25,17 +25,24 @@
   "speaker": {
     "enabled": false,
     "engine": "mock",
-    "language": "zh"
+    "language": "audio"
   },
   "mission": {
     "obstacle_timeout_sec": 90,
     "inspection_target_count": 4,
+    "inspection_confidence": 0.6,
     "max_drop_count": 3,
     "max_retries": 3
   },
   "perception": {
+    "driver": "mock",
     "model_dir": "models/",
     "confidence_threshold": 0.6
+  },
+  "remote_perception": {
+    "host": "192.168.1.200",
+    "port": 9800,
+    "timeout_sec": 2.0
   },
   "scenario_file": "config/scenario_mock.json",
   "log_telemetry": true

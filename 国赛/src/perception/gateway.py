@@ -1,6 +1,10 @@
-"""感知层统一入口 —— 编排多个检测器，对上暴露简化接口。
+"""感知层统一入口 —— 纯检测接口，不做任何运动/机械臂控制。
 
-任务状态机通过此接口获取感知结果，无需关心内部分工。
+职责边界：
+  算力板（NVIDIA）→ 相机取流 + 模型推理 → 返回结构化检测结果
+  机器狗本地      → 接收结果 → 决策 → 调运动/机械臂
+
+PerceptionGateway 的所有方法只返回结构化数据，不产生任何副作用。
 """
 
 from __future__ import annotations
@@ -13,135 +17,98 @@ from core.types import (
     BBox,
     ConeDetection,
     EquipmentDetection,
+    GaugeReading,
     InspectionReading,
     MeterStatus,
     StripDetection,
+    TargetPose,
     Zone,
+    ZoneLetterResult,
 )
 
 
 class PerceptionGateway(ABC):
-    """感知层抽象。
-
-    内部编排：
-    - ConeDetector       (YOLO 锥桶检测)
-    - EquipmentDetector  (YOLO 电力设备检测)
-    - MeterReader        (仪表盘读数)
-    - ZoneOCR            (字母识别)
-    - StripDetector      (红色长条检测 + 3D 定位)
-    - DropMonitor        (掉落视觉监控)
+    """感知层抽象 —— 纯检测，不控制任何硬件。
 
     实现：
-    - JsonScenarioPerception  (JSON 仿真，无 CV)
-    - VisionPerception        (真实 CV 管线，后续填充)
+    - JsonScenarioPerception    (JSON 场景仿真)
+    - LocalPerceptionGateway    (本机 CV，相机取流 + 本地推理)
+    - RemotePerceptionGateway   (外接 NVIDIA 算力板，TCP 通信)
     """
 
     # ── 避障阶段 ────────────────────────────────────────
 
     @abstractmethod
-    def detect_cones(self, rgb: np.ndarray, depth: np.ndarray) -> list[ConeDetection]:
-        """检测锥桶，返回 3D 位置列表。
+    def detect_obstacles(self, rgb: np.ndarray | None = None) -> list[ConeDetection]:
+        """检测障碍物（锥桶），返回按距离排序的检测列表。
 
         Args:
-            rgb:   对齐后的 RGB 图像。
-            depth: 对齐后的深度图 (m)。
-
+            rgb: RGB 图像。None 时由实现自行获取（如远程已持有相机）。
         Returns:
-            视野中所有锥桶的检测结果（按距离排序）。
+            锥桶检测列表（空列表 = 无障碍物）。
         """
         ...
 
     @abstractmethod
     def obstacle_cleared(self) -> bool:
-        """判断是否已通过障碍区。
-
-        规则：前方路径内无锥桶阻挡。
-        """
+        """判断前方路径是否已无障碍物。"""
         ...
 
     # ── 巡检阶段 ────────────────────────────────────────
 
     @abstractmethod
-    def detect_equipment(self, rgb: np.ndarray) -> list[EquipmentDetection]:
-        """检测视野中的配电柜/变压器。
+    def detect_zone_letters(self, rgb: np.ndarray | None = None) -> list[ZoneLetterResult]:
+        """识别视野中所有区域字母 A/B/C/D。
 
         Returns:
-            设备列表，每个包含 bbox 和类型。可通过 ROI 进一步识别。
+            区域字母列表，含置信度。
         """
         ...
 
     @abstractmethod
-    def read_zone_letter(self, rgb: np.ndarray, roi: BBox) -> tuple[str, float]:
-        """OCR 识别设备上的区域字母。
-
-        Args:
-            rgb: 完整图像。
-            roi: 设备 ROI（已由 detect_equipment 给出或手动指定）。
+    def detect_gauges(self, rgb: np.ndarray | None = None) -> list[GaugeReading]:
+        """读取视野中所有仪表盘状态。
 
         Returns:
-            (letter, confidence): letter ∈ {"A","B","C","D"}，confidence 0~1。
-        """
-        ...
-
-    @abstractmethod
-    def read_meter(self, rgb: np.ndarray, roi: BBox) -> tuple[MeterStatus, float, float | None]:
-        """读取仪表盘状态。
-
-        Args:
-            rgb: 完整图像。
-            roi: 仪表盘 ROI。
-
-        Returns:
-            (status, confidence, raw_value): 状态 + 置信度 + 原始读数（如有）。
+            仪表读数列表，含状态 + 置信度。
         """
         ...
 
     @abstractmethod
     def poll_inspection(self) -> list[InspectionReading]:
-        """轮询巡检结果。
+        """轮询巡检播报结果（兼容旧接口，内部将 detect_zone_letters + detect_gauges
+        合并为逐区域的 InspectionReading 序列）。
 
-        在 INSPECTION_READ 阶段每 tick 调用一次，每次返回一个未处理的读数。
-        返回空列表表示本轮已无更多读数。
-
-        Returns:
-            单元素列表（含本次读数），或空列表。
+        在 INSPECTION_READ 阶段每 tick 调用一次，每次返回一个待播报结果。
+        返回空列表 = 本轮已无更多读数。
         """
         ...
 
     # ── 抓取阶段 ────────────────────────────────────────
 
     @abstractmethod
-    def detect_red_strip(self, rgb: np.ndarray, depth: np.ndarray) -> StripDetection | None:
-        """检测红色异常长条并返回 3D 位置。
+    def detect_red_strips(self, rgb: np.ndarray | None = None) -> list[StripDetection]:
+        """检测红色异常长条。
 
         Returns:
-            StripDetection 或 None（视野中未发现）。
+            红色长条检测列表（空 = 视野中未发现）。
         """
         ...
 
     @abstractmethod
-    def check_drop(self, rgb: np.ndarray) -> bool:
-        """视觉检测：长条是否从夹爪中掉落。
+    def estimate_target_pose(self, rgb: np.ndarray | None = None) -> TargetPose | None:
+        """估计当前目标物体（红色长条 or 放置箱）的 3D 位姿。
+
+        用于机械臂抓取前获取目标的 (x, y, z, roll, pitch, yaw)。
 
         Returns:
-            True 表示检测到掉落。
+            目标位姿，含置信度。None = 无法估计。
         """
         ...
 
+    # ── 生命周期 ────────────────────────────────────────
+
     @abstractmethod
-    def execute_pickup_for_zone(self, zone: str) -> str:
-        """执行一次针对指定区域的长条抓取/投放。
-
-        内部编排：
-        1. 检测红色长条位置
-        2. 机械臂抓取
-        3. 搬运至目标区域箱
-        4. 放置 + 确认
-
-        Args:
-            zone: 目标区域字母 "A"/"B"/"C"/"D"。
-
-        Returns:
-            "success" | "drop" | "retry" | "arm_error"
-        """
+    def is_ready(self) -> bool:
+        """感知层是否就绪（模型加载完成 / 远程连接建立）。"""
         ...

@@ -58,8 +58,8 @@ class SpeakerConfig:
     """语音播报配置"""
 
     enabled: bool = False
-    engine: str = "espeak"  # "espeak" | "festival" | "mock"
-    language: str = "zh"
+    engine: str = "mock"  # "mock" | "aplay" | "ffplay" | "powershell"
+    language: str = "zh"  # 或音频目录路径
 
 
 @dataclass(frozen=True)
@@ -87,9 +87,19 @@ class MissionConfig:
 class PerceptionConfig:
     """感知层配置"""
 
+    driver: str = "mock"  # "mock" | "local" | "remote"
     model_dir: str = "models/"
     confidence_threshold: float = 0.6
-    scenario_file: str = ""  # mock 场景文件路径
+    scenario_file: str = ""  # mock 场景文件路径（driver=mock 时使用）
+
+
+@dataclass(frozen=True)
+class RemotePerceptionConfig:
+    """远程算力板连接配置"""
+
+    host: str = "192.168.1.200"
+    port: int = 9800
+    timeout_sec: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -103,6 +113,7 @@ class AppConfig:
     speaker: SpeakerConfig
     mission: MissionConfig
     perception: PerceptionConfig
+    remote_perception: RemotePerceptionConfig = field(default_factory=RemotePerceptionConfig)
     log_telemetry: bool = False
     project_root: str = ""  # 项目根目录，加载时自动填充
 
@@ -203,9 +214,18 @@ def load_app_config(config_path: str | Path) -> AppConfig:
     scenario_rel = data.get("scenario_file", "config/scenario_mock.json")
     scenario_file = str((Path(project_root) / scenario_rel).resolve())
     perception = PerceptionConfig(
+        driver=_get_str(perception_data, "driver", "mock"),
         model_dir=_get_str(perception_data, "model_dir", "models/"),
         confidence_threshold=_get_float(perception_data, "confidence_threshold", 0.6),
         scenario_file=scenario_file,
+    )
+
+    # 远程算力板
+    remote_data = data.get("remote_perception", {})
+    remote_perception = RemotePerceptionConfig(
+        host=_get_str(remote_data, "host", "192.168.1.200"),
+        port=_get_int(remote_data, "port", 9800),
+        timeout_sec=_get_float(remote_data, "timeout_sec", 2.0),
     )
 
     log_telemetry = _get_bool(data, "log_telemetry", False)
@@ -218,6 +238,7 @@ def load_app_config(config_path: str | Path) -> AppConfig:
         speaker=speaker,
         mission=mission,
         perception=perception,
+        remote_perception=remote_perception,
         log_telemetry=log_telemetry,
         project_root=project_root,
     )

@@ -5,5 +5,11 @@
 
 from perception.detector.base import BaseDetector
 from perception.gateway import PerceptionGateway
+from perception.remote_gateway import RemotePerceptionConfig, RemotePerceptionGateway
 
-__all__ = ["PerceptionGateway", "BaseDetector"]
+__all__ = [
+    "PerceptionGateway",
+    "RemotePerceptionGateway",
+    "RemotePerceptionConfig",
+    "BaseDetector",
+]
