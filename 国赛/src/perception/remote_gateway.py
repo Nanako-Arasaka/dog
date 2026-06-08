@@ -145,7 +145,6 @@ class RemotePerceptionGateway(PerceptionGateway):
                 bbox=BBox(b.get("x1", 0), b.get("y1", 0), b.get("x2", 0), b.get("y2", 0)),
                 center_3d=tuple(d.get("center_3d", [0, 0, 0]))[:3],  # type: ignore[arg-type]
                 confidence=float(d.get("confidence", 0)),
-                timestamp=float(resp.get("timestamp", time.time())),
             ))
         return results
 

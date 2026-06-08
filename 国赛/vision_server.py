@@ -18,13 +18,24 @@ import argparse
 import json
 import logging
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from camera_input import CameraInput, CameraInputConfig, VisionFrame, parse_roi
 
+SRC_DIR = Path(__file__).resolve().parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from perception.detector.fixed_detector import (  # noqa: E402
+    FixedDetectionConfig,
+    FixedDetectionPipeline,
+    empty_response,
+)
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -43,66 +54,12 @@ class ServerConfig:
     save_debug_frames: bool
     debug_dir: str
     save_every: int
-
-
-class MockDetector:
-    """First-stage detector: protocol-complete mock results only."""
-
-    def __init__(self, empty_results: bool = False) -> None:
-        self._empty = empty_results
-
-    def handle(self, request: dict[str, Any], frame: VisionFrame) -> dict[str, Any]:
-        req = str(request.get("req", ""))
-        ts = frame.timestamp
-
-        if req == "detect_obstacles":
-            return {"type": "obstacles", "detections": [] if self._empty else [
-                {
-                    "bbox": {"x1": 260, "y1": 210, "x2": 330, "y2": 390},
-                    "center_3d": [0.15, 0.0, 1.2],
-                    "confidence": 0.92,
-                }
-            ], "timestamp": ts}
-
-        if req == "detect_zone_letters":
-            detections = [] if self._empty else [
-                {"zone": "A", "confidence": 0.95, "bbox": {"x1": 80, "y1": 90, "x2": 160, "y2": 170}},
-                {"zone": "B", "confidence": 0.94, "bbox": {"x1": 260, "y1": 90, "x2": 340, "y2": 170}},
-                {"zone": "C", "confidence": 0.93, "bbox": {"x1": 80, "y1": 260, "x2": 160, "y2": 340}},
-                {"zone": "D", "confidence": 0.96, "bbox": {"x1": 260, "y1": 260, "x2": 340, "y2": 340}},
-            ]
-            return {"type": "zone_letters", "detections": detections, "timestamp": ts}
-
-        if req == "detect_gauges":
-            detections = [] if self._empty else [
-                {"zone": "A", "status": "low", "confidence": 0.94, "raw_value": 20.0},
-                {"zone": "B", "status": "normal", "confidence": 0.95, "raw_value": 50.0},
-                {"zone": "C", "status": "high", "confidence": 0.93, "raw_value": 82.0},
-                {"zone": "D", "status": "normal", "confidence": 0.96, "raw_value": 52.0},
-            ]
-            return {"type": "gauges", "detections": detections, "timestamp": ts}
-
-        if req == "detect_red_strips":
-            detections = [] if self._empty else [
-                {
-                    "bbox": {"x1": 230, "y1": 200, "x2": 420, "y2": 290},
-                    "center_3d": [0.05, 0.0, 0.28],
-                    "confidence": 0.91,
-                }
-            ]
-            return {"type": "red_strips", "detections": detections, "timestamp": ts}
-
-        if req == "estimate_target_pose":
-            if self._empty:
-                return {"type": "target_pose", "pose": None, "confidence": 0.0, "timestamp": ts}
-            return {
-                "type": "target_pose",
-                "pose": {"x": 0.05, "y": 0.0, "z": 0.28, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
-                "confidence": 0.9,
-                "timestamp": ts,
-            }
-
-        return {"type": "error", "message": f"unknown request: {req}", "timestamp": ts}
+    gauge_low_angle_range: tuple[float, float]
+    gauge_normal_angle_range: tuple[float, float]
+    gauge_high_angle_range: tuple[float, float]
+    gauge_min_confidence: float
+    gauge_debug_save_roi: bool
+    gauge_debug_dir: str
 
 
 class VisionServer:
@@ -120,7 +77,15 @@ class VisionServer:
             debug_dir=cfg.debug_dir,
             save_every=cfg.save_every,
         ))
-        self._detector = MockDetector(empty_results=cfg.empty_results)
+        self._detector = FixedDetectionPipeline(FixedDetectionConfig(
+            empty_results=cfg.empty_results,
+            gauge_low_angle_range=cfg.gauge_low_angle_range,
+            gauge_normal_angle_range=cfg.gauge_normal_angle_range,
+            gauge_high_angle_range=cfg.gauge_high_angle_range,
+            gauge_min_confidence=cfg.gauge_min_confidence,
+            gauge_debug_save_roi=cfg.gauge_debug_save_roi,
+            gauge_debug_dir=cfg.gauge_debug_dir,
+        ))
         self._stop = threading.Event()
 
     def serve_forever(self) -> None:
@@ -183,7 +148,7 @@ class VisionServer:
         if frame is None:
             req = str(request.get("req", ""))
             logging.warning("empty result because no frame is available for request: %s", req)
-            return _empty_response(req)
+            return empty_response(req)
         return self._detector.handle(request, frame)
 
 
@@ -202,6 +167,12 @@ def parse_args() -> ServerConfig:
     parser.add_argument("--debug-dir", default="output/debug_frames")
     parser.add_argument("--save-every", type=int, default=30)
     parser.add_argument("--empty-results", action="store_true")
+    parser.add_argument("--gauge-low-angle-range", default="180,250")
+    parser.add_argument("--gauge-normal-angle-range", default="250,310")
+    parser.add_argument("--gauge-high-angle-range", default="310,30")
+    parser.add_argument("--gauge-min-confidence", type=float, default=0.55)
+    parser.add_argument("--gauge-debug-save-roi", action="store_true")
+    parser.add_argument("--gauge-debug-dir", default="output/debug_gauge")
     parser.add_argument("--response-delay-sec", type=float, default=0.0)
     parser.add_argument("--disconnect-after", type=int, default=0)
     parser.add_argument("--log-level", default="INFO")
@@ -226,23 +197,20 @@ def parse_args() -> ServerConfig:
         save_debug_frames=args.save_debug_frames,
         debug_dir=args.debug_dir,
         save_every=args.save_every,
+        gauge_low_angle_range=_parse_angle_range(args.gauge_low_angle_range),
+        gauge_normal_angle_range=_parse_angle_range(args.gauge_normal_angle_range),
+        gauge_high_angle_range=_parse_angle_range(args.gauge_high_angle_range),
+        gauge_min_confidence=args.gauge_min_confidence,
+        gauge_debug_save_roi=args.gauge_debug_save_roi,
+        gauge_debug_dir=args.gauge_debug_dir,
     )
 
 
-def _empty_response(req: str) -> dict[str, Any]:
-    ts = time.time()
-    if req == "detect_obstacles":
-        return {"type": "obstacles", "detections": [], "timestamp": ts}
-    if req == "detect_zone_letters":
-        return {"type": "zone_letters", "detections": [], "timestamp": ts}
-    if req == "detect_gauges":
-        return {"type": "gauges", "detections": [], "timestamp": ts}
-    if req == "detect_red_strips":
-        return {"type": "red_strips", "detections": [], "timestamp": ts}
-    if req == "estimate_target_pose":
-        return {"type": "target_pose", "pose": None, "confidence": 0.0, "timestamp": ts}
-    return {"type": "error", "message": f"unknown request: {req}", "timestamp": ts}
-
+def _parse_angle_range(raw: str) -> tuple[float, float]:
+    parts = [item.strip() for item in raw.split(",")]
+    if len(parts) != 2:
+        raise ValueError("angle range must be formatted as start,end")
+    return float(parts[0]), float(parts[1])
 
 def main() -> int:
     cfg = parse_args()

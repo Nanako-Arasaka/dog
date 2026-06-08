@@ -109,10 +109,27 @@ def test_normal_connection_and_json() -> None:
         assert raw["type"] == "gauges"
         assert isinstance(raw["detections"], list)
         assert raw["detections"][0]["zone"] == "A"
+        assert raw["detections"][0]["status"] in {"low", "normal", "high"}
+        assert "bbox" in raw["detections"][0]
+
+        obstacles = gw.detect_obstacles()
+        assert len(obstacles) == 1
+        assert obstacles[0].confidence > 0
+
+        letters = gw.detect_zone_letters()
+        assert len(letters) == 4
 
         gauges = gw.detect_gauges()
-        assert len(gauges) == 4
-        assert [g.zone.value for g in gauges] == ["A", "B", "C", "D"]
+        assert len(gauges) >= 1
+        assert gauges[0].zone.value == "A"
+        assert gauges[0].status.value in {"low", "normal", "high"}
+
+        strips = gw.detect_red_strips()
+        assert len(strips) == 1
+
+        pose = gw.estimate_target_pose()
+        assert pose is not None
+        assert pose.confidence > 0
 
         readings = []
         while True:
@@ -120,7 +137,8 @@ def test_normal_connection_and_json() -> None:
             if not batch:
                 break
             readings.extend(batch)
-        assert len(readings) == 4
+        assert len(readings) >= 1
+        assert readings[0].zone.value == "A"
     finally:
         _stop_server(proc)
 

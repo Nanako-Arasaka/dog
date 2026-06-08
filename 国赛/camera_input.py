@@ -144,7 +144,31 @@ class CameraInput:
         x = (self._frame_id * 7) % max(self._cfg.width, 1)
         x2 = min(x + 80, self._cfg.width)
         image[self._cfg.height // 3:self._cfg.height // 3 + 60, x:x2, :] = (0, 0, 255)
+        self._draw_mock_gauge(image)
         return image
+
+    def _draw_mock_gauge(self, image: np.ndarray) -> None:
+        h, w = image.shape[:2]
+        radius = max(28, min(w, h) // 7)
+        cx = min(max(radius + 16, w // 4), w - radius - 1)
+        cy = min(max(radius + 16, h // 2), h - radius - 1)
+        yy, xx = np.indices((h, w))
+        disk = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+        image[disk] = (240, 240, 240)
+        ring = np.abs(np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) - radius) < 2.0
+        image[ring] = (20, 20, 20)
+
+        angle_deg = 210.0
+        tip_x = int(cx + np.cos(np.deg2rad(angle_deg)) * radius * 0.75)
+        tip_y = int(cy - np.sin(np.deg2rad(angle_deg)) * radius * 0.75)
+        steps = max(abs(tip_x - cx), abs(tip_y - cy), 1)
+        xs = np.linspace(cx, tip_x, steps).astype(np.int64)
+        ys = np.linspace(cy, tip_y, steps).astype(np.int64)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                px = np.clip(xs + dx, 0, w - 1)
+                py = np.clip(ys + dy, 0, h - 1)
+                image[py, px] = (0, 0, 0)
 
     def _preprocess(self, image: np.ndarray) -> np.ndarray:
         if self._cfg.roi is not None:

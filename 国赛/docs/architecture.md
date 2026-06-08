@@ -2,83 +2,279 @@
 
 ## 概述
 
-本项目是绝影 Lite2 四足机器人参加国赛的完整软件框架。采用**分层架构 + 依赖注入**模式，所有硬件与算法模块通过 ABC 接口隔离，支持仿真/实机无缝切换。
+本项目是绝影 Lite2 四足机器人参加国赛的分层软件框架。机器狗本地负责任务状态机、运动控制、机械臂控制和语音播放；外接算力板负责相机取流和视觉检测，并通过 TCP JSON 把结构化感知结果发回机器狗本地。
+
+当前架构保持 `Mission -> Gateway -> Hardware` 的分层边界：
+
+- `mission/` 只做任务流程调度和决策。
+- `perception/` 只返回结构化视觉结果，不控制机器狗、机械臂或语音。
+- `hardware/` 负责相机、机械臂、扬声器等硬件抽象。
+- `dog_sdk/` 负责绝影 UDP 协议和遥测。
+- `vision_server.py` 是算力板端进程，负责取流、检测、TCP JSON 响应。
 
 ## 分层架构
 
-```
+```text
+机器狗本地
 ┌──────────────────────────────────────────────┐
-│  main.py  (入口)                             │
-│  app/     (配置 + DI 容器)                    │
+│ src/main.py                                  │
+│ app/config.py, app/container.py              │
 ├──────────────────────────────────────────────┤
-│  mission/ (任务状态机)                        │
-│    ├─ base.py          MissionBase ABC       │
-│    ├─ national_stage.py  国赛 10 阶段状态机    │
-│    └─ phase.py         PhaseHandler ABC      │
-├──────────┬──────────────┬────────────────────┤
-│perception│  navigation  │  runtime/           │
-│gateway   │  gateway     │  controller.py      │
-├──────────┼──────────────┼────────────────────┤
-│camera    │  camera      │  dog_sdk/           │
-│arm       │  dog_sdk     │  (UDP 协议栈)       │
-│detector/*│              │                    │
-├──────────┴──────────────┴────────────────────┤
-│  core/  (领域类型 + 异常)                      │
-│  utils/ (工具函数)                            │
+│ mission/national_stage.py                    │
+│ 11 个执行阶段状态机                           │
+├──────────────┬──────────────┬────────────────┤
+│ perception/  │ navigation/  │ runtime/       │
+│ gateway.py   │ gateway.py   │ controller.py  │
+│ remote_gateway.py           │ speaker.py     │
+├──────────────┼──────────────┼────────────────┤
+│ hardware/arm │ hardware/camera │ dog_sdk/     │
+│ hardware/speaker             │ UDP 协议栈     │
+└──────────────────────────────────────────────┘
+
+算力板端
+┌──────────────────────────────────────────────┐
+│ vision_server.py                             │
+├──────────────────────────────────────────────┤
+│ camera_input.py                              │
+│ CameraInput -> VisionFrame                   │
+├──────────────────────────────────────────────┤
+│ src/perception/detector/fixed_detector.py    │
+│ FixedDetectionPipeline                       │
 └──────────────────────────────────────────────┘
 ```
 
-## 模块职责
+## 任务流程
 
-| 模块 | 职责 | 关键类 |
-|------|------|--------|
-| `core/` | 领域类型、枚举、异常 | `Zone`, `MeterStatus`, `MissionPhase` |
-| `app/` | 配置加载、DI 容器 | `AppConfig`, `AppContainer` |
-| `hardware/camera/` | 相机抽象 | `CameraGateway` |
-| `hardware/arm/` | 机械臂抽象 + 运动学 | `ArmGateway`, `KinematicSolver` |
-| `hardware/speaker/` | 语音播报抽象 | `SpeakerGateway` |
-| `dog_sdk/` | 绝影 UDP 协议栈 | `DogController`, `UdpTransport` |
-| `perception/` | 感知编排 + 检测器基类 | `PerceptionGateway`, `BaseDetector` |
-| `navigation/` | 定位 + 路径规划 | `NavigationGateway` |
-| `mission/` | 任务状态机 | `NationalStageMission`, `PhaseHandler` |
-| `utils/` | 计时、坐标变换 | `RateLimiter`, `pixel_to_camera_3d` |
+`NationalStageMission` 当前是 11 个执行阶段加终态：
 
-## 任务流程（10 阶段状态机）
-
+```text
+INIT
+  -> OBSTACLE_APPROACH
+  -> OBSTACLE_DETECT
+  -> OBSTACLE_CROSS
+  -> INSPECTION_NAV
+  -> INSPECTION_SCAN
+  -> INSPECTION_READ
+  -> PICKUP_PLAN
+  -> PICKUP_NAV
+  -> PICKUP_GRAB
+  -> PICKUP_TRANSPORT
+  -> PICKUP_PLACE
+  -> DONE / FAILED / STOPPED
 ```
-INIT → OBSTACLE_APPROACH → OBSTACLE_DETECT → OBSTACLE_CROSS
-  → INSPECTION_NAV → INSPECTION_SCAN → INSPECTION_READ
-  → PICKUP_PLAN → PICKUP_NAV → PICKUP_GRAB → PICKUP_TRANSPORT → PICKUP_PLACE
-  → DONE / FAILED
+
+## 关键模块职责
+
+| 模块 | 职责 | 关键类/文件 |
+|------|------|-------------|
+| `app/` | 配置加载和依赖注入 | `AppConfig`, `AppContainer` |
+| `core/` | 领域类型、枚举、异常 | `Zone`, `MeterStatus`, `MissionPhase`, `GaugeReading` |
+| `mission/` | 国赛状态机和任务调度 | `NationalStageMission` |
+| `perception/gateway.py` | 纯感知接口定义 | `PerceptionGateway` |
+| `perception/remote_gateway.py` | 机器狗本地 TCP 感知客户端 | `RemotePerceptionGateway` |
+| `navigation/` | 导航抽象和 mock 导航 | `NavigationGateway`, `MockNavigator` |
+| `hardware/arm/` | 机械臂原子动作抽象 | `ArmGateway`, `MockArm` |
+| `hardware/speaker/` | 预录音频播放抽象 | `SpeakerGateway`, `AudioFileSpeaker` |
+| `runtime/controller.py` | 机器狗控制循环 | `DogController` |
+| `dog_sdk/` | 绝影 UDP 指令与遥测 | `commands.py`, `transport.py` |
+| `camera_input.py` | 算力板端取流层 | `CameraInput`, `VisionFrame` |
+| `vision_server.py` | 算力板 TCP JSON 服务端 | `VisionServer` |
+| `perception/detector/fixed_detector.py` | 固定检测和仪表识别 | `FixedDetectionPipeline` |
+
+## 远程感知协议
+
+协议是 JSON Lines over TCP，每行一条 JSON。
+
+机器狗本地发送：
+
+```json
+{"req": "detect_obstacles"}
+{"req": "detect_zone_letters"}
+{"req": "detect_gauges"}
+{"req": "detect_red_strips"}
+{"req": "estimate_target_pose", "target": "strip"}
 ```
+
+算力板返回：
+
+```json
+{"type": "obstacles", "detections": [], "timestamp": 123.456}
+{"type": "zone_letters", "detections": [], "timestamp": 123.456}
+{"type": "gauges", "detections": [], "timestamp": 123.456}
+{"type": "red_strips", "detections": [], "timestamp": 123.456}
+{"type": "target_pose", "pose": null, "confidence": 0.0, "timestamp": 123.456}
+```
+
+`detections` 中的字段按任务不同包含 `zone`、`object_type`、`status`、`bbox`、`pose`、`center_3d`、`confidence`、`timestamp` 等。输出兼容 `RemotePerceptionGateway`，后续 Mission 可直接消费解析后的领域对象。
+
+## 算力板取流
+
+`camera_input.py` 提供统一帧对象：
+
+```text
+VisionFrame
+├─ frame_id
+├─ timestamp
+├─ image
+├─ width
+├─ height
+└─ source_type
+```
+
+支持三种输入：
+
+```powershell
+python .\vision_server.py --mode mock
+python .\vision_server.py --mode video --source .\sample.mp4
+python .\vision_server.py --mode camera --source 0
+```
+
+取流层支持：
+
+- resize 到统一尺寸，默认 `640x480`
+- `--flip-horizontal`
+- `--roi x,y,w,h`
+- `--save-debug-frames`
+- `--debug-dir output/debug_frames`
+- `--save-every 30`
+
+## 固定检测闭环
+
+当前 `FixedDetectionPipeline` 已提供可运行的固定检测闭环：
+
+- `detect_obstacles()`：返回锥桶结构化结果。
+- `detect_zone_letters()`：返回 A/B/C/D 字母区域结构化结果。
+- `detect_gauges()`：基于图像识别仪表盘状态。
+- `detect_red_strips()`：简单红色阈值检测红色长条，失败时回退固定结果。
+- `estimate_target_pose()`：返回目标位姿估计。
+
+这一步仍不是 YOLO/OCR 正式模型，目的是保证取流、检测、TCP、远端解析、测试闭环已经打通。
+
+## 仪表盘识别
+
+`detect_gauges()` 已从固定模拟结果升级为基础图像识别流程：
+
+1. 灰度化。
+2. 模糊降噪。
+3. HoughCircles 或亮色区域定位表盘。
+4. 裁剪表盘 ROI。
+5. Canny + HoughLinesP 或 numpy fallback 检测指针。
+6. 计算指针角度。
+7. 按角度阈值输出 `low`、`normal`、`high`。
+
+相关参数：
+
+```powershell
+--gauge-low-angle-range 180,250
+--gauge-normal-angle-range 250,310
+--gauge-high-angle-range 310,30
+--gauge-min-confidence 0.55
+--gauge-debug-save-roi
+--gauge-debug-dir output/debug_gauge
+```
+
+当前本地环境无 `opencv-python` 时会走 numpy fallback；算力板安装 OpenCV 后会优先走 OpenCV 流程。
 
 ## 配置说明
 
 编辑 `config/robot_config.json`：
 
-- `robot`: 机器狗 IP/端口
-- `timing`: 心跳/主循环频率
-- `camera.driver`: `"mock"` (仿真) 或 `"realsense"` (实机)
-- `arm.driver`: `"mock"` 或具体型号驱动名
-- `speaker.engine`: `"mock"` / `"espeak"`
-- `mission`: 任务超时/重试参数
-- `perception`: 模型目录 / 置信度阈值
-- `scenario_file`: 仿真场景 JSON 路径
+- `robot`: 机器狗 IP 和 UDP 端口。
+- `timing`: 心跳和主循环频率。
+- `camera`: 机器狗本地相机配置，当前默认 mock。
+- `arm`: 机械臂配置，当前默认 mock。
+- `speaker`: 预录音频播放配置，禁用时使用 mock。
+- `mission`: 任务超时、重试、掉落上限、置信度阈值。
+- `perception.driver`: `"mock"`、`"local"`、`"remote"`。
+- `remote_perception`: 外接算力板 TCP 地址和超时。
+- `scenario_file`: mock 感知场景文件。
+
+远程感知模式示例：
+
+```json
+{
+  "perception": {
+    "driver": "remote",
+    "model_dir": "models/",
+    "confidence_threshold": 0.6
+  },
+  "remote_perception": {
+    "host": "192.168.1.200",
+    "port": 9800,
+    "timeout_sec": 2.0
+  }
+}
+```
 
 ## 运行方式
 
-```powershell
-# 仿真联调（使用 scenario_mock.json）
-.\scripts\run.ps1
+机器狗本地 mock 联调：
 
-# 部署到机器狗
+```powershell
+cd E:\DOG\Thedog\国赛
+.\scripts\run.ps1
+```
+
+算力板端视觉服务：
+
+```powershell
+cd E:\DOG\Thedog\国赛
+python .\vision_server.py --host 0.0.0.0 --port 9800 --mode mock
+```
+
+摄像头输入：
+
+```powershell
+python .\vision_server.py --host 0.0.0.0 --port 9800 --mode camera --source 0
+```
+
+带仪表调试输出：
+
+```powershell
+python .\vision_server.py --mode camera --source 0 --gauge-debug-save-roi --gauge-debug-dir output/debug_gauge
+```
+
+部署到机器狗上位机：
+
+```powershell
+cd E:\DOG\Thedog\国赛
 .\scripts\deploy.ps1 -TargetUser ubuntu -TargetHost 192.168.1.103 -TargetDir /home/ubuntu/national_stage
 ```
 
-## 扩展指南
+## 测试
 
-1. **新增相机驱动**: 实现 `CameraGateway`，在 `_create_camera()` 中注册。
-2. **新增机械臂驱动**: 实现 `ArmGateway` + 可选 `KinematicSolver`，在 `_create_arm()` 中注册。
-3. **新增检测器**: 继承 `BaseDetector[T]`，在 `PerceptionGateway` 实现中编排。
-4. **新增任务阶段**: 创建 `PhaseHandler` 子类，注册到状态机的 `_phase_handlers` 字典。
-5. **写测试**: 在 `tests/` 下新增测试文件，使用 `conftest.py` 中的 mock fixtures。
+相机取流测试：
+
+```powershell
+python .\tools\test_camera_input.py
+```
+
+远程感知 TCP 闭环测试：
+
+```powershell
+python .\tools\test_remote_perception_client.py
+```
+
+完整 pytest：
+
+```powershell
+$env:PYTHONPATH='E:\DOG\Thedog\国赛\src'
+python -m pytest -q
+```
+
+当前已覆盖：
+
+- mock 连续取帧。
+- video/camera 输入优雅处理。
+- debug frame 保存。
+- TCP 正常连接、JSON 接收、断连重连、超时、空结果。
+- 固定检测结构化输出。
+- 仪表盘 LOW/NORMAL/HIGH 角度分类。
+- `RemotePerceptionGateway` 对检测 JSON 的解析。
+
+## 后续扩展
+
+1. 在算力板安装 OpenCV 后，用真实 camera/video 输入调仪表角度阈值。
+2. 替换 `FixedDetectionPipeline` 中的固定/阈值逻辑为正式 YOLO、OCR、仪表读数模型。
+3. 保持 `PerceptionGateway` 的纯检测边界，不把机器狗运动、机械臂动作或语音逻辑放入算力板视觉服务。
+4. 机械臂和导航继续通过现有 `ArmGateway`、`NavigationGateway` 接入。
