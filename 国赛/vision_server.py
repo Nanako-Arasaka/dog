@@ -23,6 +23,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from camera_input import CameraInput, CameraInputConfig, VisionFrame, parse_roi
+
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -36,62 +38,11 @@ class ServerConfig:
     empty_results: bool
     response_delay_sec: float
     disconnect_after: int
-
-
-class FrameSource:
-    """Minimal frame source wrapper.
-
-    The current first-stage server returns mock detections regardless of frame
-    contents. The source is still opened to validate mock/video/camera modes.
-    """
-
-    def __init__(self, cfg: ServerConfig) -> None:
-        self._cfg = cfg
-        self._capture: Any = None
-
-    def open(self) -> None:
-        if self._cfg.mode == "mock":
-            logging.info("frame source: mock")
-            return
-
-        try:
-            import cv2  # type: ignore
-        except ImportError:
-            logging.warning("opencv-python not installed; %s source is not opened", self._cfg.mode)
-            return
-
-        source: int | str
-        if self._cfg.mode == "camera":
-            source = int(self._cfg.source) if self._cfg.source else 0
-        elif self._cfg.mode == "video":
-            source = self._cfg.source
-            if not source:
-                raise ValueError("--source is required when --mode=video")
-        else:
-            raise ValueError(f"unknown source mode: {self._cfg.mode}")
-
-        cap = cv2.VideoCapture(source)
-        if not cap.isOpened():
-            raise RuntimeError(f"failed to open {self._cfg.mode} source: {source}")
-        if self._cfg.mode == "camera":
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._cfg.width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._cfg.height)
-            cap.set(cv2.CAP_PROP_FPS, self._cfg.fps)
-        self._capture = cap
-        logging.info("frame source opened: mode=%s source=%s", self._cfg.mode, source)
-
-    def read(self) -> None:
-        if self._capture is None:
-            return
-        ok, _frame = self._capture.read()
-        if not ok and self._cfg.mode == "video":
-            self._capture.set(1, 0)
-            self._capture.read()
-
-    def close(self) -> None:
-        if self._capture is not None:
-            self._capture.release()
-            self._capture = None
+    flip_horizontal: bool
+    roi: tuple[int, int, int, int] | None
+    save_debug_frames: bool
+    debug_dir: str
+    save_every: int
 
 
 class MockDetector:
@@ -100,9 +51,9 @@ class MockDetector:
     def __init__(self, empty_results: bool = False) -> None:
         self._empty = empty_results
 
-    def handle(self, request: dict[str, Any]) -> dict[str, Any]:
+    def handle(self, request: dict[str, Any], frame: VisionFrame) -> dict[str, Any]:
         req = str(request.get("req", ""))
-        ts = time.time()
+        ts = frame.timestamp
 
         if req == "detect_obstacles":
             return {"type": "obstacles", "detections": [] if self._empty else [
@@ -157,12 +108,23 @@ class MockDetector:
 class VisionServer:
     def __init__(self, cfg: ServerConfig) -> None:
         self._cfg = cfg
-        self._source = FrameSource(cfg)
+        self._camera = CameraInput(CameraInputConfig(
+            mode=cfg.mode,
+            source=cfg.source,
+            width=cfg.width,
+            height=cfg.height,
+            fps=cfg.fps,
+            flip_horizontal=cfg.flip_horizontal,
+            roi=cfg.roi,
+            save_debug_frames=cfg.save_debug_frames,
+            debug_dir=cfg.debug_dir,
+            save_every=cfg.save_every,
+        ))
         self._detector = MockDetector(empty_results=cfg.empty_results)
         self._stop = threading.Event()
 
     def serve_forever(self) -> None:
-        self._source.open()
+        self._camera.open()
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
                 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -177,7 +139,7 @@ class VisionServer:
                         continue
                     threading.Thread(target=self._handle_client, args=(conn, addr), daemon=True).start()
         finally:
-            self._source.close()
+            self._camera.close()
 
     def stop(self) -> None:
         self._stop.set()
@@ -211,14 +173,18 @@ class VisionServer:
                     return
 
     def _handle_line(self, line: bytes) -> dict[str, Any]:
-        self._source.read()
         try:
             request = json.loads(line.decode("utf-8"))
         except json.JSONDecodeError as exc:
             return {"type": "error", "message": f"invalid json: {exc}", "timestamp": time.time()}
         if not isinstance(request, dict):
             return {"type": "error", "message": "request must be a JSON object", "timestamp": time.time()}
-        return self._detector.handle(request)
+        frame = self._camera.read()
+        if frame is None:
+            req = str(request.get("req", ""))
+            logging.warning("empty result because no frame is available for request: %s", req)
+            return _empty_response(req)
+        return self._detector.handle(request, frame)
 
 
 def parse_args() -> ServerConfig:
@@ -230,6 +196,11 @@ def parse_args() -> ServerConfig:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--flip-horizontal", action="store_true")
+    parser.add_argument("--roi", default="", help="reserved ROI crop as x,y,w,h")
+    parser.add_argument("--save-debug-frames", action="store_true")
+    parser.add_argument("--debug-dir", default="output/debug_frames")
+    parser.add_argument("--save-every", type=int, default=30)
     parser.add_argument("--empty-results", action="store_true")
     parser.add_argument("--response-delay-sec", type=float, default=0.0)
     parser.add_argument("--disconnect-after", type=int, default=0)
@@ -250,7 +221,27 @@ def parse_args() -> ServerConfig:
         empty_results=args.empty_results,
         response_delay_sec=args.response_delay_sec,
         disconnect_after=args.disconnect_after,
+        flip_horizontal=args.flip_horizontal,
+        roi=parse_roi(args.roi),
+        save_debug_frames=args.save_debug_frames,
+        debug_dir=args.debug_dir,
+        save_every=args.save_every,
     )
+
+
+def _empty_response(req: str) -> dict[str, Any]:
+    ts = time.time()
+    if req == "detect_obstacles":
+        return {"type": "obstacles", "detections": [], "timestamp": ts}
+    if req == "detect_zone_letters":
+        return {"type": "zone_letters", "detections": [], "timestamp": ts}
+    if req == "detect_gauges":
+        return {"type": "gauges", "detections": [], "timestamp": ts}
+    if req == "detect_red_strips":
+        return {"type": "red_strips", "detections": [], "timestamp": ts}
+    if req == "estimate_target_pose":
+        return {"type": "target_pose", "pose": None, "confidence": 0.0, "timestamp": ts}
+    return {"type": "error", "message": f"unknown request: {req}", "timestamp": ts}
 
 
 def main() -> int:
