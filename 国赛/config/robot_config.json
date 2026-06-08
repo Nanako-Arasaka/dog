@@ -1,21 +1,42 @@
 {
-  "robot_ip": "192.168.1.120",
-  "robot_command_port": 43893,
-  "local_ip": "0.0.0.0",
-  "local_telemetry_port": 43897,
-  "heartbeat_hz": 2.0,
-  "main_loop_hz": 20.0,
-  "log_telemetry": true,
-  "scenario_file": "config/scenario_mock.json",
+  "robot": {
+    "ip": "192.168.1.120",
+    "command_port": 43893,
+    "local_ip": "0.0.0.0",
+    "local_telemetry_port": 43897
+  },
+  "timing": {
+    "heartbeat_hz": 2.0,
+    "main_loop_hz": 20.0
+  },
+  "camera": {
+    "driver": "mock",
+    "serial": "",
+    "width": 640,
+    "height": 480,
+    "fps": 30
+  },
+  "arm": {
+    "driver": "mock",
+    "port": "/dev/ttyUSB0",
+    "baudrate": 115200,
+    "dh_params": []
+  },
   "speaker": {
     "enabled": false,
-    "command_template": "echo \"{text}\""
+    "engine": "mock",
+    "language": "zh"
   },
   "mission": {
-    "obstacle_forward_value": 12000,
-    "obstacle_turn_value": 0,
     "obstacle_timeout_sec": 90,
     "inspection_target_count": 4,
-    "max_drop_count": 3
-  }
+    "max_drop_count": 3,
+    "max_retries": 3
+  },
+  "perception": {
+    "model_dir": "models/",
+    "confidence_threshold": 0.6
+  },
+  "scenario_file": "config/scenario_mock.json",
+  "log_telemetry": true
 }

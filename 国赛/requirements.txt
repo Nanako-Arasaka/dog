@@ -1,0 +1,18 @@
+# 国赛 —— Python 依赖
+# 核心依赖
+numpy>=1.24.0
+
+# 测试
+pytest>=7.0.0
+
+# 视觉（按需启用）
+# opencv-python>=4.8.0
+# torch>=2.0.0
+# ultralytics>=8.0.0
+# paddleocr>=2.7.0
+
+# 相机（按需启用）
+# pyrealsense2>=2.54.0
+
+# 语音（按需启用）
+# (espeak 为系统包，非 Python 包)

@@ -1,23 +1,14 @@
+"""向后兼容 re-export —— Speaker 已迁移至 hardware.speaker。
+
+新代码请直接:
+    from hardware.speaker import SpeakerGateway, EspeakSpeaker, MockSpeaker
+"""
+
 from __future__ import annotations
 
-import logging
-import subprocess
-from dataclasses import dataclass
+from hardware.speaker.interface import EspeakSpeaker, MockSpeaker, SpeakerGateway
 
+# 保留旧的 Speaker 别名
+Speaker = EspeakSpeaker
 
-@dataclass(frozen=True)
-class SpeakerConfig:
-    enabled: bool
-    command_template: str
-
-
-class Speaker:
-    def __init__(self, cfg: SpeakerConfig) -> None:
-        self._cfg = cfg
-
-    def say(self, text: str) -> None:
-        logging.info("语音播报: %s", text)
-        if not self._cfg.enabled:
-            return
-        cmd = self._cfg.command_template.format(text=text)
-        subprocess.run(cmd, shell=True, check=True)
+__all__ = ["SpeakerGateway", "Speaker", "EspeakSpeaker", "MockSpeaker"]
