@@ -29,6 +29,9 @@ class FixedDetectionConfig:
     letter_template_dir: str = "assets/templates/letters"
     letter_debug_save_roi: bool = False
     letter_debug_dir: str = "output/debug_letters"
+    inspection_debug_save: bool = False
+    inspection_debug_dir: str = "output/debug_inspection"
+    inspection_max_match_distance: float = 180.0
     gauge_low_angle_range: tuple[float, float] = (180.0, 250.0)
     gauge_normal_angle_range: tuple[float, float] = (250.0, 310.0)
     gauge_high_angle_range: tuple[float, float] = (310.0, 30.0)
@@ -51,6 +54,8 @@ class FixedDetectionPipeline:
             return self.detect_zone_letters(frame)
         if req == "detect_gauges":
             return self.detect_gauges(frame)
+        if req == "poll_inspection":
+            return self.poll_inspection(frame)
         if req == "detect_red_strips":
             return self.detect_red_strips(frame)
         if req == "estimate_target_pose":
@@ -123,6 +128,27 @@ class FixedDetectionPipeline:
             "timestamp": frame.timestamp,
         }
 
+    def poll_inspection(self, frame: VisionFrame | None) -> dict[str, Any]:
+        if frame is None or self._cfg.empty_results:
+            return empty_response("poll_inspection")
+        letters_resp = self.detect_zone_letters(frame)
+        gauges_resp = self.detect_gauges(frame)
+        results = fuse_inspection_results(
+            letters_resp.get("detections", []),
+            gauges_resp.get("detections", []),
+            timestamp=frame.timestamp,
+            letter_min_confidence=self._cfg.letter_min_confidence,
+            gauge_min_confidence=self._cfg.gauge_min_confidence,
+            max_match_distance=self._cfg.inspection_max_match_distance,
+        )
+        _save_inspection_debug(frame, self._cfg, results, _try_cv2())
+        return {
+            "type": "inspection_results",
+            "results": results,
+            "detections": results,
+            "timestamp": frame.timestamp,
+        }
+
     def detect_red_strips(self, frame: VisionFrame | None) -> dict[str, Any]:
         if frame is None or self._cfg.empty_results:
             return empty_response("detect_red_strips")
@@ -190,11 +216,105 @@ def empty_response(req: str) -> dict[str, Any]:
         return {"type": "zone_letters", "detections": [], "timestamp": ts}
     if req == "detect_gauges":
         return {"type": "gauges", "detections": [], "timestamp": ts}
+    if req == "poll_inspection":
+        return {"type": "inspection_results", "results": [], "detections": [], "timestamp": ts}
     if req == "detect_red_strips":
         return {"type": "red_strips", "detections": [], "timestamp": ts}
     if req == "estimate_target_pose":
         return {"type": "target_pose", "pose": None, "confidence": 0.0, "timestamp": ts}
     return {"type": "error", "message": f"unknown request: {req}", "timestamp": ts}
+
+
+def fuse_inspection_results(
+    zone_letters: list[dict[str, Any]],
+    gauges: list[dict[str, Any]],
+    *,
+    timestamp: float | None = None,
+    letter_min_confidence: float = 0.55,
+    gauge_min_confidence: float = 0.55,
+    max_match_distance: float = 180.0,
+) -> list[dict[str, Any]]:
+    ts = time.time() if timestamp is None else timestamp
+    valid_letters = [
+        item for item in zone_letters
+        if str(item.get("zone", "")).upper() in {"A", "B", "C", "D"}
+        and float(item.get("confidence", 0.0)) >= letter_min_confidence
+    ]
+    valid_gauges = [
+        item for item in gauges
+        if str(item.get("status", "")).lower() in {"low", "normal", "high"}
+        and float(item.get("confidence", 0.0)) >= gauge_min_confidence
+    ]
+    if not valid_letters or not valid_gauges:
+        return []
+
+    pairs = _match_letters_to_gauges(valid_letters, valid_gauges, max_match_distance)
+    results: list[dict[str, Any]] = []
+    for letter, gauge in pairs:
+        zone = str(letter.get("zone", "")).upper()
+        status = str(gauge.get("status", "normal")).lower()
+        confidence = min(float(letter.get("confidence", 0.0)), float(gauge.get("confidence", 0.0)))
+        result = {
+            "zone": zone,
+            "gauge_status": status,
+            "status": status,
+            "abnormal": status in {"low", "high"},
+            "confidence": round(confidence, 4),
+            "letter_bbox": letter.get("bbox"),
+            "gauge_bbox": gauge.get("bbox"),
+            "speak_key": f"{zone}_{status}",
+            "timestamp": ts,
+        }
+        results.append(result)
+    results.sort(key=lambda item: item["zone"])
+    return results
+
+
+def _match_letters_to_gauges(
+    letters: list[dict[str, Any]],
+    gauges: list[dict[str, Any]],
+    max_match_distance: float,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    pairs: list[tuple[float, int, int]] = []
+    for li, letter in enumerate(letters):
+        lb = letter.get("bbox")
+        if not lb:
+            continue
+        lc = _bbox_center(lb)
+        for gi, gauge in enumerate(gauges):
+            gb = gauge.get("bbox")
+            if not gb:
+                continue
+            gc = _bbox_center(gb)
+            dist = ((lc[0] - gc[0]) ** 2 + (lc[1] - gc[1]) ** 2) ** 0.5
+            pairs.append((dist, li, gi))
+
+    matched_letters: set[int] = set()
+    matched_gauges: set[int] = set()
+    result: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for dist, li, gi in sorted(pairs, key=lambda item: item[0]):
+        if dist > max_match_distance:
+            continue
+        if li in matched_letters or gi in matched_gauges:
+            continue
+        matched_letters.add(li)
+        matched_gauges.add(gi)
+        result.append((letters[li], gauges[gi]))
+
+    # Fallback: stable order matching for anything not paired spatially.
+    remaining_letters = [item for i, item in enumerate(letters) if i not in matched_letters]
+    remaining_gauges = [item for i, item in enumerate(gauges) if i not in matched_gauges]
+    remaining_letters.sort(key=lambda item: str(item.get("zone", "")))
+    for letter, gauge in zip(remaining_letters, remaining_gauges):
+        result.append((letter, gauge))
+    return result
+
+
+def _bbox_center(bbox: dict[str, Any]) -> tuple[float, float]:
+    return (
+        (float(bbox.get("x1", 0)) + float(bbox.get("x2", 0))) / 2.0,
+        (float(bbox.get("y1", 0)) + float(bbox.get("y2", 0))) / 2.0,
+    )
 
 
 def _timestamp(frame: VisionFrame | None) -> float:
@@ -509,6 +629,59 @@ def _draw_rect_numpy(image: np.ndarray, bbox: dict[str, int], color: tuple[int, 
     image[max(y2 - 2, y1):y2, x1:x2] = color
     image[y1:y2, x1:x1 + 2] = color
     image[y1:y2, max(x2 - 2, x1):x2] = color
+
+
+def _save_inspection_debug(
+    frame: VisionFrame,
+    cfg: FixedDetectionConfig,
+    results: list[dict[str, Any]],
+    cv2: Any | None,
+) -> None:
+    if not cfg.inspection_debug_save or not results:
+        return
+    out_dir = Path(cfg.inspection_debug_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    millis = int(frame.timestamp * 1000)
+    debug = frame.image.copy()
+    for item in results:
+        letter_bbox = item.get("letter_bbox")
+        gauge_bbox = item.get("gauge_bbox")
+        label = f"{item.get('zone', '?')}_{item.get('gauge_status', '?')} {float(item.get('confidence', 0.0)):.2f}"
+        if cv2 is not None:
+            if letter_bbox:
+                cv2.rectangle(
+                    debug,
+                    (int(letter_bbox["x1"]), int(letter_bbox["y1"])),
+                    (int(letter_bbox["x2"]), int(letter_bbox["y2"])),
+                    (255, 255, 0),
+                    2,
+                )
+            if gauge_bbox:
+                cv2.rectangle(
+                    debug,
+                    (int(gauge_bbox["x1"]), int(gauge_bbox["y1"])),
+                    (int(gauge_bbox["x2"]), int(gauge_bbox["y2"])),
+                    (0, 255, 255),
+                    2,
+                )
+                cv2.putText(
+                    debug,
+                    label,
+                    (int(gauge_bbox["x1"]), max(20, int(gauge_bbox["y1"]) - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 255),
+                    2,
+                )
+        else:
+            if letter_bbox:
+                _draw_rect_numpy(debug, letter_bbox, color=(255, 255, 0))
+            if gauge_bbox:
+                _draw_rect_numpy(debug, gauge_bbox, color=(0, 255, 255))
+    if cv2 is not None:
+        cv2.imwrite(str(out_dir / f"inspection_debug_{frame.frame_id:06d}_{millis}.jpg"), debug)
+    else:
+        _write_ppm(out_dir / f"inspection_debug_{frame.frame_id:06d}_{millis}.ppm", debug)
 
 
 def _detect_gauge_from_frame(

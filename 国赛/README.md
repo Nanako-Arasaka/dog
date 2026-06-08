@@ -18,6 +18,7 @@
 - `FixedDetectionPipeline`：固定检测闭环。
 - A/B/C/D 字母识别增强：模板自动生成、模板匹配、ROI/debug 图保存。
 - 仪表盘识别增强：表盘定位、指针角度估计、`low/normal/high` 状态判断。
+- 巡检结果融合：生成 `abnormal` 和 `speak_key`，例如 `A_low`、`B_normal`。
 - 远程感知、取流、固定检测、字母识别、仪表识别的测试脚本。
 
 未完成或仍需实机接入：
@@ -141,6 +142,7 @@ TCP JSON Lines，每行一个请求或响应。
 {"req": "detect_obstacles"}
 {"req": "detect_zone_letters"}
 {"req": "detect_gauges"}
+{"req": "poll_inspection"}
 {"req": "detect_red_strips"}
 {"req": "estimate_target_pose", "target": "strip"}
 ```
@@ -150,6 +152,7 @@ TCP JSON Lines，每行一个请求或响应。
 - `obstacles`
 - `zone_letters`
 - `gauges`
+- `inspection_results`
 - `red_strips`
 - `target_pose`
 - `error`
@@ -178,6 +181,38 @@ assets/templates/letters/
 ```
 
 如果模板不存在，检测层会自动生成基础模板。真实上场前建议用现场规则中的 Arial、200 磅 A/B/C/D 样张替换这些模板，再结合 `output/debug_letters/` 调置信度阈值。
+
+## 巡检融合输出
+
+`poll_inspection` 会融合字母识别和仪表识别结果，输出可直接给 Mission 使用的巡检结果：
+
+```json
+{
+  "zone": "A",
+  "gauge_status": "low",
+  "abnormal": true,
+  "confidence": 0.82,
+  "letter_bbox": {"x1": 10, "y1": 10, "x2": 80, "y2": 120},
+  "gauge_bbox": {"x1": 130, "y1": 40, "x2": 260, "y2": 170},
+  "speak_key": "A_low",
+  "timestamp": 123.456
+}
+```
+
+规则：
+
+- `normal` 生成 `abnormal=false`
+- `low/high` 生成 `abnormal=true`
+- 低置信度字母或仪表不参与融合
+- 优先按空间距离匹配，失败时按顺序匹配
+
+调试参数：
+
+```powershell
+--inspection-debug-save
+--inspection-debug-dir output/debug_inspection
+--inspection-max-match-distance 180
+```
 
 ## 仪表盘识别参数
 
@@ -228,6 +263,7 @@ python -m pytest -q
 - TCP 正常连接、JSON 接收、断连重连、超时和空结果。
 - 固定检测结果可被 `RemotePerceptionGateway` 解析。
 - A/B/C/D 字母模板匹配、模板缺失自动生成、debug 图保存。
+- 巡检融合、`speak_key` 生成、低置信过滤。
 - 仪表盘 LOW/NORMAL/HIGH 角度分类。
 
 ## 部署到机器狗上位机

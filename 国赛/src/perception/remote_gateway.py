@@ -6,6 +6,7 @@
     {"req": "detect_obstacles"}
     {"req": "detect_zone_letters"}
     {"req": "detect_gauges"}
+    {"req": "poll_inspection"}
     {"req": "detect_red_strips"}
     {"req": "estimate_target_pose", "target": "strip" | "bin"}
 
@@ -13,6 +14,7 @@
     {"type": "obstacles",    "detections": [...], "timestamp": 1.23}
     {"type": "zone_letters", "detections": [...], "timestamp": 1.23}
     {"type": "gauges",       "detections": [...], "timestamp": 1.23}
+    {"type": "inspection_results", "results": [...], "timestamp": 1.23}
     {"type": "red_strips",   "detections": [...], "timestamp": 1.23}
     {"type": "target_pose",  "pose": {...}, "confidence": 0.9, "timestamp": 1.23}
     {"type": "error", "message": "..."}
@@ -89,6 +91,7 @@ class RemotePerceptionGateway(PerceptionGateway):
         # 巡检轮询
         self._inspection_queue: list[InspectionReading] = []
         self._inspection_cursor: int = 0
+        self._inspection_loaded: bool = False
 
     # ── 连接管理 ──
 
@@ -184,6 +187,26 @@ class RemotePerceptionGateway(PerceptionGateway):
             ))
         return results
 
+    def _parse_inspection_results(self, resp: dict) -> list[InspectionReading]:
+        dets = resp.get("results", resp.get("detections", []))
+        results: list[InspectionReading] = []
+        for d in dets:
+            zone_str = str(d.get("zone", "")).upper()
+            if zone_str not in ("A", "B", "C", "D"):
+                continue
+            status_str = str(d.get("gauge_status", d.get("status", "normal"))).lower()
+            try:
+                status = MeterStatus(status_str)
+            except ValueError:
+                status = MeterStatus.NORMAL
+            results.append(InspectionReading(
+                zone=Zone(zone_str),
+                meter_status=status,
+                confidence=float(d.get("confidence", 0)),
+                timestamp=float(d.get("timestamp", resp.get("timestamp", time.time()))),
+            ))
+        return results
+
     def _parse_red_strips(self, resp: dict) -> list[StripDetection]:
         dets = resp.get("detections", [])
         results = []
@@ -247,9 +270,16 @@ class RemotePerceptionGateway(PerceptionGateway):
                 timestamp=g.timestamp,
             ))
         self._inspection_cursor = 0
+        self._inspection_loaded = True
         return self._cache_gauges
 
     def poll_inspection(self) -> list[InspectionReading]:
+        if not self._inspection_loaded:
+            resp = self._request({"req": "poll_inspection"})
+            if resp is not None and resp.get("type") != "error":
+                self._inspection_queue = self._parse_inspection_results(resp)
+                self._inspection_cursor = 0
+                self._inspection_loaded = True
         if self._inspection_cursor >= len(self._inspection_queue):
             return []
         item = self._inspection_queue[self._inspection_cursor]

@@ -92,6 +92,7 @@ INIT
 {"req": "detect_obstacles"}
 {"req": "detect_zone_letters"}
 {"req": "detect_gauges"}
+{"req": "poll_inspection"}
 {"req": "detect_red_strips"}
 {"req": "estimate_target_pose", "target": "strip"}
 ```
@@ -102,6 +103,7 @@ INIT
 {"type": "obstacles", "detections": [], "timestamp": 123.456}
 {"type": "zone_letters", "detections": [], "timestamp": 123.456}
 {"type": "gauges", "detections": [], "timestamp": 123.456}
+{"type": "inspection_results", "results": [], "detections": [], "timestamp": 123.456}
 {"type": "red_strips", "detections": [], "timestamp": 123.456}
 {"type": "target_pose", "pose": null, "confidence": 0.0, "timestamp": 123.456}
 ```
@@ -146,6 +148,7 @@ python .\vision_server.py --mode camera --source 0
 - `detect_obstacles()`：返回锥桶结构化结果。
 - `detect_zone_letters()`：基于模板匹配识别 A/B/C/D 字母区域。
 - `detect_gauges()`：基于图像识别仪表盘状态。
+- `poll_inspection()`：融合字母和仪表结果，生成 Mission 可消费的巡检结果。
 - `detect_red_strips()`：简单红色阈值检测红色长条，失败时回退固定结果。
 - `estimate_target_pose()`：返回目标位姿估计。
 
@@ -188,6 +191,43 @@ assets/templates/letters/
 ```powershell
 python .\vision_server.py --mode camera --source 0 --letter-debug-save-roi --letter-debug-dir output/debug_letters
 ```
+
+## 巡检结果融合
+
+`poll_inspection()` 会在算力板端把 `detect_zone_letters()` 和 `detect_gauges()` 的结果融合为巡检结果：
+
+```json
+{
+  "zone": "A",
+  "gauge_status": "low",
+  "status": "low",
+  "abnormal": true,
+  "confidence": 0.82,
+  "letter_bbox": {"x1": 10, "y1": 10, "x2": 80, "y2": 120},
+  "gauge_bbox": {"x1": 130, "y1": 40, "x2": 260, "y2": 170},
+  "speak_key": "A_low",
+  "timestamp": 123.456
+}
+```
+
+融合规则：
+
+- 低置信度字母或仪表不参与融合。
+- 优先按字母 bbox 和仪表 bbox 中心点空间距离匹配。
+- 空间距离超过阈值时，允许按稳定顺序回退匹配。
+- `normal` -> `abnormal=false`。
+- `low/high` -> `abnormal=true`。
+- `speak_key` 与 `SpeakerGateway.play(key)` 兼容，例如 `A_low`、`B_normal`、`C_high`。
+
+相关参数：
+
+```powershell
+--inspection-debug-save
+--inspection-debug-dir output/debug_inspection
+--inspection-max-match-distance 180
+```
+
+融合 debug 图会标注字母 bbox、仪表 bbox，以及 `zone + status + confidence`。
 
 ## 仪表盘识别
 
@@ -309,6 +349,7 @@ python -m pytest -q
 - TCP 正常连接、JSON 接收、断连重连、超时、空结果。
 - 固定检测结构化输出。
 - A/B/C/D 字母模板匹配、模板自动生成、debug 图保存。
+- 巡检融合结果、`speak_key` 生成、低置信过滤、debug 图保存。
 - 仪表盘 LOW/NORMAL/HIGH 角度分类。
 - `RemotePerceptionGateway` 对检测 JSON 的解析。
 

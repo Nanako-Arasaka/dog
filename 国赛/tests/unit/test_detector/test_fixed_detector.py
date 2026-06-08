@@ -12,7 +12,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from camera_input import VisionFrame  # noqa: E402
-from perception.detector.fixed_detector import FixedDetectionConfig, FixedDetectionPipeline  # noqa: E402
+from perception.detector.fixed_detector import (  # noqa: E402
+    FixedDetectionConfig,
+    FixedDetectionPipeline,
+    fuse_inspection_results,
+)
 from perception.remote_gateway import RemotePerceptionConfig, RemotePerceptionGateway  # noqa: E402
 
 
@@ -210,6 +214,57 @@ def test_detect_zone_letters_saves_debug_images() -> None:
     assert result["detections"]
     saved = list(debug_dir.glob("letter_*"))
     assert saved
+    shutil.rmtree(debug_dir, ignore_errors=True)
+
+
+def test_fuse_inspection_results_generates_speak_keys() -> None:
+    letters = [
+        {"zone": "A", "confidence": 0.9, "bbox": {"x1": 10, "y1": 10, "x2": 50, "y2": 50}},
+        {"zone": "B", "confidence": 0.9, "bbox": {"x1": 110, "y1": 10, "x2": 150, "y2": 50}},
+        {"zone": "C", "confidence": 0.9, "bbox": {"x1": 210, "y1": 10, "x2": 250, "y2": 50}},
+    ]
+    gauges = [
+        {"status": "low", "confidence": 0.9, "bbox": {"x1": 12, "y1": 70, "x2": 52, "y2": 110}},
+        {"status": "normal", "confidence": 0.9, "bbox": {"x1": 112, "y1": 70, "x2": 152, "y2": 110}},
+        {"status": "high", "confidence": 0.9, "bbox": {"x1": 212, "y1": 70, "x2": 252, "y2": 110}},
+    ]
+    result = fuse_inspection_results(letters, gauges, timestamp=1.0)
+    assert [(item["zone"], item["gauge_status"], item["speak_key"], item["abnormal"]) for item in result] == [
+        ("A", "low", "A_low", True),
+        ("B", "normal", "B_normal", False),
+        ("C", "high", "C_high", True),
+    ]
+
+
+def test_fuse_inspection_results_filters_low_confidence() -> None:
+    letters = [
+        {"zone": "A", "confidence": 0.4, "bbox": {"x1": 0, "y1": 0, "x2": 20, "y2": 20}},
+        {"zone": "B", "confidence": 0.9, "bbox": {"x1": 40, "y1": 0, "x2": 60, "y2": 20}},
+    ]
+    gauges = [
+        {"status": "low", "confidence": 0.4, "bbox": {"x1": 0, "y1": 30, "x2": 20, "y2": 50}},
+        {"status": "normal", "confidence": 0.4, "bbox": {"x1": 40, "y1": 30, "x2": 60, "y2": 50}},
+    ]
+    assert fuse_inspection_results(letters, gauges, timestamp=1.0) == []
+
+
+def test_fuse_inspection_results_empty_inputs() -> None:
+    assert fuse_inspection_results([], [], timestamp=1.0) == []
+
+
+def test_poll_inspection_returns_fused_results_and_debug() -> None:
+    debug_dir = ROOT / "output" / "test_debug_inspection"
+    shutil.rmtree(debug_dir, ignore_errors=True)
+    detector = FixedDetectionPipeline(FixedDetectionConfig(
+        inspection_debug_save=True,
+        inspection_debug_dir=str(debug_dir),
+        inspection_max_match_distance=10.0,
+    ))
+    result = detector.poll_inspection(_frame())
+    assert result["type"] == "inspection_results"
+    assert result["results"]
+    assert result["results"][0]["speak_key"].endswith(("_low", "_normal", "_high"))
+    assert list(debug_dir.glob("inspection_debug_*"))
     shutil.rmtree(debug_dir, ignore_errors=True)
     detector = FixedDetectionPipeline(FixedDetectionConfig(
         gauge_debug_save_roi=True,

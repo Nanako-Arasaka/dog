@@ -58,6 +58,9 @@ class ServerConfig:
     letter_template_dir: str
     letter_debug_save_roi: bool
     letter_debug_dir: str
+    inspection_debug_save: bool
+    inspection_debug_dir: str
+    inspection_max_match_distance: float
     gauge_low_angle_range: tuple[float, float]
     gauge_normal_angle_range: tuple[float, float]
     gauge_high_angle_range: tuple[float, float]
@@ -87,6 +90,9 @@ class VisionServer:
             letter_template_dir=cfg.letter_template_dir,
             letter_debug_save_roi=cfg.letter_debug_save_roi,
             letter_debug_dir=cfg.letter_debug_dir,
+            inspection_debug_save=cfg.inspection_debug_save,
+            inspection_debug_dir=cfg.inspection_debug_dir,
+            inspection_max_match_distance=cfg.inspection_max_match_distance,
             gauge_low_angle_range=cfg.gauge_low_angle_range,
             gauge_normal_angle_range=cfg.gauge_normal_angle_range,
             gauge_high_angle_range=cfg.gauge_high_angle_range,
@@ -179,6 +185,9 @@ def parse_args() -> ServerConfig:
     parser.add_argument("--letter-template-dir", default="assets/templates/letters")
     parser.add_argument("--letter-debug-save-roi", action="store_true")
     parser.add_argument("--letter-debug-dir", default="output/debug_letters")
+    parser.add_argument("--inspection-debug-save", action="store_true")
+    parser.add_argument("--inspection-debug-dir", default="output/debug_inspection")
+    parser.add_argument("--inspection-max-match-distance", type=float, default=180.0)
     parser.add_argument("--gauge-low-angle-range", default="180,250")
     parser.add_argument("--gauge-normal-angle-range", default="250,310")
     parser.add_argument("--gauge-high-angle-range", default="310,30")
@@ -213,6 +222,9 @@ def parse_args() -> ServerConfig:
         letter_template_dir=args.letter_template_dir,
         letter_debug_save_roi=args.letter_debug_save_roi,
         letter_debug_dir=args.letter_debug_dir,
+        inspection_debug_save=args.inspection_debug_save,
+        inspection_debug_dir=args.inspection_debug_dir,
+        inspection_max_match_distance=args.inspection_max_match_distance,
         gauge_low_angle_range=_parse_angle_range(args.gauge_low_angle_range),
         gauge_normal_angle_range=_parse_angle_range(args.gauge_normal_angle_range),
         gauge_high_angle_range=_parse_angle_range(args.gauge_high_angle_range),
