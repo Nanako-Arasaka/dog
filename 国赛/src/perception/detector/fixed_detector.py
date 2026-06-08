@@ -7,7 +7,9 @@ integrated.
 
 from __future__ import annotations
 
+import struct
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,10 @@ except ImportError:  # pragma: no cover - only used when imported outside server
 @dataclass(frozen=True)
 class FixedDetectionConfig:
     empty_results: bool = False
+    letter_min_confidence: float = 0.55
+    letter_template_dir: str = "assets/templates/letters"
+    letter_debug_save_roi: bool = False
+    letter_debug_dir: str = "output/debug_letters"
     gauge_low_angle_range: tuple[float, float] = (180.0, 250.0)
     gauge_normal_angle_range: tuple[float, float] = (250.0, 310.0)
     gauge_high_angle_range: tuple[float, float] = (310.0, 30.0)
@@ -73,25 +79,10 @@ class FixedDetectionPipeline:
     def detect_zone_letters(self, frame: VisionFrame | None) -> dict[str, Any]:
         if frame is None or self._cfg.empty_results:
             return empty_response("detect_zone_letters")
-        w, h = frame.width, frame.height
-        zones = [
-            ("A", _bbox(w, h, 0.12, 0.16, 0.25, 0.30), 0.95),
-            ("B", _bbox(w, h, 0.42, 0.16, 0.55, 0.30), 0.94),
-            ("C", _bbox(w, h, 0.12, 0.54, 0.25, 0.68), 0.93),
-            ("D", _bbox(w, h, 0.42, 0.54, 0.55, 0.68), 0.96),
-        ]
+        detections = _detect_letters_from_frame(frame, self._cfg)
         return {
             "type": "zone_letters",
-            "detections": [
-                {
-                    "zone": zone,
-                    "object_type": "zone_letter",
-                    "bbox": bbox,
-                    "confidence": conf,
-                    "timestamp": frame.timestamp,
-                }
-                for zone, bbox, conf in zones
-            ],
+            "detections": detections,
             "timestamp": frame.timestamp,
         }
 
@@ -247,6 +238,279 @@ def _detect_red_region(frame: VisionFrame) -> dict[str, Any] | None:
     }
 
 
+def _detect_letters_from_frame(frame: VisionFrame, cfg: FixedDetectionConfig) -> list[dict[str, Any]]:
+    templates = _ensure_letter_templates(cfg.letter_template_dir)
+    image = frame.image
+    if image.size == 0 or image.ndim != 3:
+        return []
+
+    cv2 = _try_cv2()
+    if cv2 is not None:
+        candidates = _letter_candidates_cv2(image, cv2)
+    else:
+        candidates = _letter_candidates_numpy(image)
+
+    detections: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for bbox, binary_roi in candidates:
+        match = _match_letter_template(binary_roi, templates)
+        if match is None:
+            continue
+        letter, confidence = match
+        if confidence < cfg.letter_min_confidence or letter in seen:
+            continue
+        seen.add(letter)
+        detection = {
+            "zone": letter,
+            "letter": letter,
+            "object_type": "zone_letter",
+            "bbox": bbox,
+            "confidence": round(float(confidence), 4),
+            "timestamp": frame.timestamp,
+        }
+        detections.append(detection)
+        _save_letter_debug(frame, cfg, bbox, letter, confidence, cv2)
+
+    detections.sort(key=lambda item: item["zone"])
+    return detections
+
+
+def _letter_candidates_cv2(image: np.ndarray, cv2: Any) -> list[tuple[dict[str, int], np.ndarray]]:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    binary = cv2.adaptiveThreshold(
+        blurred,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        8,
+    )
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates: list[tuple[dict[str, int], np.ndarray]] = []
+    h, w = gray.shape
+    for contour in contours:
+        x, y, bw, bh = cv2.boundingRect(contour)
+        area = int(cv2.contourArea(contour))
+        candidate = _normalize_letter_candidate(binary, x, y, bw, bh, area, w, h)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _letter_candidates_numpy(image: np.ndarray) -> list[tuple[dict[str, int], np.ndarray]]:
+    gray = _gray_numpy(image)
+    mask = gray < 90
+    return _connected_components(mask)
+
+
+def _connected_components(mask: np.ndarray) -> list[tuple[dict[str, int], np.ndarray]]:
+    h, w = mask.shape
+    visited = np.zeros(mask.shape, dtype=bool)
+    candidates: list[tuple[dict[str, int], np.ndarray]] = []
+
+    ys, xs = np.where(mask)
+    for start_y, start_x in zip(ys.tolist(), xs.tolist()):
+        if visited[start_y, start_x]:
+            continue
+        stack = [(start_x, start_y)]
+        visited[start_y, start_x] = True
+        points_x: list[int] = []
+        points_y: list[int] = []
+        while stack:
+            x, y = stack.pop()
+            points_x.append(x)
+            points_y.append(y)
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if 0 <= nx < w and 0 <= ny < h and mask[ny, nx] and not visited[ny, nx]:
+                    visited[ny, nx] = True
+                    stack.append((nx, ny))
+
+        x1, x2 = min(points_x), max(points_x) + 1
+        y1, y2 = min(points_y), max(points_y) + 1
+        bw, bh = x2 - x1, y2 - y1
+        candidate = _normalize_letter_candidate(mask.astype(np.uint8) * 255, x1, y1, bw, bh, len(points_x), w, h)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _normalize_letter_candidate(
+    binary_image: np.ndarray,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    area: int,
+    image_width: int,
+    image_height: int,
+) -> tuple[dict[str, int], np.ndarray] | None:
+    if width < 18 or height < 28 or area < 60:
+        return None
+    if width > image_width * 0.45 or height > image_height * 0.65:
+        return None
+    aspect = width / max(height, 1)
+    if not 0.25 <= aspect <= 1.4:
+        return None
+    pad = max(4, int(max(width, height) * 0.08))
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(image_width, x + width + pad)
+    y2 = min(image_height, y + height + pad)
+    roi = binary_image[y1:y2, x1:x2]
+    if roi.size == 0:
+        return None
+    roi_binary = roi > 0
+    bbox = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+    return bbox, roi_binary
+
+
+def _match_letter_template(
+    roi_binary: np.ndarray,
+    templates: dict[str, np.ndarray],
+) -> tuple[str, float] | None:
+    if roi_binary.size == 0:
+        return None
+    target = _resize_binary(roi_binary, (96, 64))
+    best_letter = ""
+    best_score = -1.0
+    for letter, template in templates.items():
+        tmpl = _resize_binary(template, target.shape)
+        intersection = np.logical_and(target, tmpl).sum()
+        union = np.logical_or(target, tmpl).sum()
+        iou = float(intersection) / float(max(union, 1))
+        same = float((target == tmpl).sum()) / float(target.size)
+        score = 0.7 * iou + 0.3 * same
+        if score > best_score:
+            best_score = score
+            best_letter = letter
+    if not best_letter:
+        return None
+    return best_letter, best_score
+
+
+def _ensure_letter_templates(template_dir: str) -> dict[str, np.ndarray]:
+    root = Path(template_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    templates: dict[str, np.ndarray] = {}
+    for letter in ("A", "B", "C", "D"):
+        mask = _letter_template_mask(letter, width=80, height=120)
+        path = root / f"{letter}.png"
+        if not path.exists():
+            _write_png_gray(path, np.where(mask, 0, 255).astype(np.uint8))
+        templates[letter] = mask
+    return templates
+
+
+def _letter_template_mask(letter: str, width: int = 80, height: int = 120) -> np.ndarray:
+    patterns = {
+        "A": [
+            "0011100",
+            "0110110",
+            "1100011",
+            "1100011",
+            "1111111",
+            "1100011",
+            "1100011",
+            "1100011",
+            "1100011",
+        ],
+        "B": [
+            "1111100",
+            "1100110",
+            "1100011",
+            "1100110",
+            "1111100",
+            "1100110",
+            "1100011",
+            "1100110",
+            "1111100",
+        ],
+        "C": [
+            "0011110",
+            "0110011",
+            "1100000",
+            "1100000",
+            "1100000",
+            "1100000",
+            "1100000",
+            "0110011",
+            "0011110",
+        ],
+        "D": [
+            "1111000",
+            "1101100",
+            "1100110",
+            "1100011",
+            "1100011",
+            "1100011",
+            "1100110",
+            "1101100",
+            "1111000",
+        ],
+    }
+    rows = patterns[letter]
+    small = np.array([[ch == "1" for ch in row] for row in rows], dtype=bool)
+    return _resize_binary(small, (height, width))
+
+
+def _resize_binary(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    out_h, out_w = shape
+    in_h, in_w = mask.shape
+    y_idx = np.linspace(0, in_h - 1, out_h).astype(np.int64)
+    x_idx = np.linspace(0, in_w - 1, out_w).astype(np.int64)
+    return mask[y_idx][:, x_idx].astype(bool)
+
+
+def _save_letter_debug(
+    frame: VisionFrame,
+    cfg: FixedDetectionConfig,
+    bbox: dict[str, int],
+    letter: str,
+    confidence: float,
+    cv2: Any | None,
+) -> None:
+    if not cfg.letter_debug_save_roi:
+        return
+    out_dir = Path(cfg.letter_debug_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    millis = int(frame.timestamp * 1000)
+    x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
+    roi = frame.image[y1:y2, x1:x2]
+    safe_conf = int(confidence * 1000)
+    if cv2 is not None:
+        cv2.imwrite(str(out_dir / f"letter_roi_{letter}_{safe_conf}_{frame.frame_id:06d}_{millis}.jpg"), roi)
+        debug = frame.image.copy()
+        cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 255, 0), 2)
+        cv2.putText(
+            debug,
+            f"{letter} {confidence:.2f}",
+            (x1, max(20, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 0),
+            2,
+        )
+        cv2.imwrite(str(out_dir / f"letter_debug_{letter}_{safe_conf}_{frame.frame_id:06d}_{millis}.jpg"), debug)
+        return
+    debug = frame.image.copy()
+    _draw_rect_numpy(debug, bbox, color=(255, 255, 0))
+    _write_ppm(out_dir / f"letter_roi_{letter}_{safe_conf}_{frame.frame_id:06d}_{millis}.ppm", roi)
+    _write_ppm(out_dir / f"letter_debug_{letter}_{safe_conf}_{frame.frame_id:06d}_{millis}.ppm", debug)
+
+
+def _draw_rect_numpy(image: np.ndarray, bbox: dict[str, int], color: tuple[int, int, int]) -> None:
+    x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
+    x1 = max(0, min(image.shape[1] - 1, x1))
+    x2 = max(0, min(image.shape[1] - 1, x2))
+    y1 = max(0, min(image.shape[0] - 1, y1))
+    y2 = max(0, min(image.shape[0] - 1, y2))
+    image[y1:y1 + 2, x1:x2] = color
+    image[max(y2 - 2, y1):y2, x1:x2] = color
+    image[y1:y2, x1:x1 + 2] = color
+    image[y1:y2, max(x2 - 2, x1):x2] = color
+
+
 def _detect_gauge_from_frame(
     frame: VisionFrame,
     cfg: FixedDetectionConfig,
@@ -372,19 +636,67 @@ def _detect_gauge_with_numpy(
 def _locate_gauge_by_bright_region(image: np.ndarray) -> tuple[int, int, int] | None:
     gray = _gray_numpy(image)
     bright = gray > 120
-    ys, xs = np.where(bright)
-    if xs.size < 80:
+    components = _bright_components(bright)
+    if not components:
         return None
-    x1, x2 = int(xs.min()), int(xs.max())
-    y1, y2 = int(ys.min()), int(ys.max())
+
+    best: tuple[int, int, int, int, int] | None = None
+    best_score = -1.0
+    for x1, y1, x2, y2, area in components:
+        width = x2 - x1
+        height = y2 - y1
+        if width < 30 or height < 30:
+            continue
+        aspect = width / max(height, 1)
+        if not 0.65 <= aspect <= 1.35:
+            continue
+        box_area = max(width * height, 1)
+        fill = area / box_area
+        # A filled circular dial has a high but not rectangular fill ratio.
+        if not 0.45 <= fill <= 0.95:
+            continue
+        score = area * (1.0 - abs(1.0 - aspect))
+        if score > best_score:
+            best = (x1, y1, x2, y2, area)
+            best_score = score
+    if best is None:
+        return None
+
+    x1, y1, x2, y2, _area = best
     width = x2 - x1
     height = y2 - y1
-    if width < 20 or height < 20:
-        return None
     cx = (x1 + x2) // 2
     cy = (y1 + y2) // 2
     radius = max(10, min(width, height) // 2)
     return cx, cy, radius
+
+
+def _bright_components(mask: np.ndarray) -> list[tuple[int, int, int, int, int]]:
+    h, w = mask.shape
+    visited = np.zeros(mask.shape, dtype=bool)
+    components: list[tuple[int, int, int, int, int]] = []
+    ys, xs = np.where(mask)
+    for start_y, start_x in zip(ys.tolist(), xs.tolist()):
+        if visited[start_y, start_x]:
+            continue
+        stack = [(start_x, start_y)]
+        visited[start_y, start_x] = True
+        min_x = max_x = start_x
+        min_y = max_y = start_y
+        area = 0
+        while stack:
+            x, y = stack.pop()
+            area += 1
+            min_x = min(min_x, x)
+            max_x = max(max_x, x)
+            min_y = min(min_y, y)
+            max_y = max(max_y, y)
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if 0 <= nx < w and 0 <= ny < h and mask[ny, nx] and not visited[ny, nx]:
+                    visited[ny, nx] = True
+                    stack.append((nx, ny))
+        components.append((min_x, min_y, max_x + 1, max_y + 1, area))
+    return components
 
 
 def _circle_bbox(cx: int, cy: int, radius: int, width: int, height: int) -> dict[str, int]:
@@ -475,6 +787,26 @@ def _write_ppm(path: Path, image: np.ndarray) -> None:
         rgb = np.stack([rgb, rgb, rgb], axis=2)
     header = f"P6\n{rgb.shape[1]} {rgb.shape[0]}\n255\n".encode("ascii")
     path.write_bytes(header + np.ascontiguousarray(rgb).astype(np.uint8).tobytes())
+
+
+def _write_png_gray(path: Path, image: np.ndarray) -> None:
+    img = np.ascontiguousarray(image.astype(np.uint8))
+    height, width = img.shape
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    raw = b"".join(b"\x00" + img[row].tobytes() for row in range(height))
+    payload = b"\x89PNG\r\n\x1a\n"
+    payload += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+    payload += chunk(b"IDAT", zlib.compress(raw))
+    payload += chunk(b"IEND", b"")
+    path.write_bytes(payload)
 
 
 def _try_cv2() -> Any | None:

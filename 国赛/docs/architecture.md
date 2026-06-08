@@ -79,7 +79,8 @@ INIT
 | `dog_sdk/` | 绝影 UDP 指令与遥测 | `commands.py`, `transport.py` |
 | `camera_input.py` | 算力板端取流层 | `CameraInput`, `VisionFrame` |
 | `vision_server.py` | 算力板 TCP JSON 服务端 | `VisionServer` |
-| `perception/detector/fixed_detector.py` | 固定检测和仪表识别 | `FixedDetectionPipeline` |
+| `perception/detector/fixed_detector.py` | 固定检测、字母识别和仪表识别 | `FixedDetectionPipeline` |
+| `assets/templates/letters/` | A/B/C/D 模板资源 | `A.png`, `B.png`, `C.png`, `D.png` |
 
 ## 远程感知协议
 
@@ -143,12 +144,50 @@ python .\vision_server.py --mode camera --source 0
 当前 `FixedDetectionPipeline` 已提供可运行的固定检测闭环：
 
 - `detect_obstacles()`：返回锥桶结构化结果。
-- `detect_zone_letters()`：返回 A/B/C/D 字母区域结构化结果。
+- `detect_zone_letters()`：基于模板匹配识别 A/B/C/D 字母区域。
 - `detect_gauges()`：基于图像识别仪表盘状态。
 - `detect_red_strips()`：简单红色阈值检测红色长条，失败时回退固定结果。
 - `estimate_target_pose()`：返回目标位姿估计。
 
 这一步仍不是 YOLO/OCR 正式模型，目的是保证取流、检测、TCP、远端解析、测试闭环已经打通。
+
+## 区域字母识别
+
+`detect_zone_letters()` 已从固定模拟结果升级为基础模板匹配流程：
+
+1. 灰度化。
+2. 二值化或自适应阈值。
+3. 轮廓/连通域检测。
+4. 裁剪候选字母 ROI。
+5. 与 A/B/C/D 模板匹配。
+6. 输出 `zone`、`letter`、`bbox`、`confidence`、`timestamp`。
+
+模板目录：
+
+```text
+assets/templates/letters/
+├─ A.png
+├─ B.png
+├─ C.png
+└─ D.png
+```
+
+如果模板不存在，检测层会自动生成基础模板图。模板当前是基础块状字形，用于打通闭环；实机调试时可以替换为 Arial 200 磅样张模板。
+
+相关参数：
+
+```powershell
+--letter-min-confidence 0.55
+--letter-template-dir assets/templates/letters
+--letter-debug-save-roi
+--letter-debug-dir output/debug_letters
+```
+
+带字母调试输出：
+
+```powershell
+python .\vision_server.py --mode camera --source 0 --letter-debug-save-roi --letter-debug-dir output/debug_letters
+```
 
 ## 仪表盘识别
 
@@ -269,12 +308,14 @@ python -m pytest -q
 - debug frame 保存。
 - TCP 正常连接、JSON 接收、断连重连、超时、空结果。
 - 固定检测结构化输出。
+- A/B/C/D 字母模板匹配、模板自动生成、debug 图保存。
 - 仪表盘 LOW/NORMAL/HIGH 角度分类。
 - `RemotePerceptionGateway` 对检测 JSON 的解析。
 
 ## 后续扩展
 
-1. 在算力板安装 OpenCV 后，用真实 camera/video 输入调仪表角度阈值。
-2. 替换 `FixedDetectionPipeline` 中的固定/阈值逻辑为正式 YOLO、OCR、仪表读数模型。
-3. 保持 `PerceptionGateway` 的纯检测边界，不把机器狗运动、机械臂动作或语音逻辑放入算力板视觉服务。
-4. 机械臂和导航继续通过现有 `ArmGateway`、`NavigationGateway` 接入。
+1. 在算力板安装 OpenCV 后，用真实 camera/video 输入调字母模板和仪表角度阈值。
+2. 用真实 Arial 200 磅样张替换 `assets/templates/letters/` 中的基础模板。
+3. 替换 `FixedDetectionPipeline` 中的固定/阈值逻辑为正式 YOLO、OCR、仪表读数模型。
+4. 保持 `PerceptionGateway` 的纯检测边界，不把机器狗运动、机械臂动作或语音逻辑放入算力板视觉服务。
+5. 机械臂和导航继续通过现有 `ArmGateway`、`NavigationGateway` 接入。

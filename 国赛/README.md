@@ -3,7 +3,7 @@
 这是一个面向 2026 四足大型组国赛任务的软件框架。当前代码分为两部分：
 
 - **机器狗本地**：任务状态机、运动控制、机械臂控制、语音播放、远程感知客户端。
-- **算力板端**：相机取流、固定检测、仪表盘识别、TCP JSON 结果输出。
+- **算力板端**：相机取流、固定检测、A/B/C/D 字母识别、仪表盘识别、TCP JSON 结果输出。
 
 算力板只输出视觉结构化结果，不控制机器狗运动、机械臂或语音。
 
@@ -16,8 +16,9 @@
 - `vision_server.py`：算力板端 TCP JSON 服务。
 - `CameraInput`：支持 mock、video、camera 三种输入。
 - `FixedDetectionPipeline`：固定检测闭环。
+- A/B/C/D 字母识别增强：模板自动生成、模板匹配、ROI/debug 图保存。
 - 仪表盘识别增强：表盘定位、指针角度估计、`low/normal/high` 状态判断。
-- 远程感知、取流、固定检测、仪表识别的测试脚本。
+- 远程感知、取流、固定检测、字母识别、仪表识别的测试脚本。
 
 未完成或仍需实机接入：
 
@@ -33,6 +34,9 @@
 国赛
 ├─ camera_input.py                 # 算力板取流层，输出 VisionFrame
 ├─ vision_server.py                # 算力板 TCP JSON 视觉服务
+├─ assets
+│  └─ templates
+│     └─ letters                  # A/B/C/D 模板图
 ├─ config
 │  ├─ robot_config.json
 │  └─ scenario_mock.json
@@ -53,7 +57,7 @@
 │  │  ├─ remote_gateway.py        # TCP 远程感知客户端
 │  │  └─ detector
 │  │     ├─ base.py
-│  │     └─ fixed_detector.py     # 固定检测 + 仪表盘识别
+│  │     └─ fixed_detector.py     # 固定检测 + 字母识别 + 仪表盘识别
 │  ├─ runtime
 │  └─ utils
 ├─ tests
@@ -121,6 +125,12 @@ python .\vision_server.py --mode camera --source 0 --save-debug-frames --debug-d
 python .\vision_server.py --mode camera --source 0 --gauge-debug-save-roi --gauge-debug-dir output/debug_gauge
 ```
 
+保存区域字母 debug 图：
+
+```powershell
+python .\vision_server.py --mode camera --source 0 --letter-debug-save-roi --letter-debug-dir output/debug_letters
+```
+
 ## 远程感知协议
 
 TCP JSON Lines，每行一个请求或响应。
@@ -145,6 +155,29 @@ TCP JSON Lines，每行一个请求或响应。
 - `error`
 
 结果字段包含 `zone`、`object_type`、`status`、`bbox`、`pose`、`center_3d`、`confidence`、`timestamp` 等，兼容 `RemotePerceptionGateway`。
+
+## 区域字母识别参数
+
+`detect_zone_letters()` 当前支持基础模板匹配：
+
+```powershell
+--letter-min-confidence 0.55
+--letter-template-dir assets/templates/letters
+--letter-debug-save-roi
+--letter-debug-dir output/debug_letters
+```
+
+模板目录：
+
+```text
+assets/templates/letters/
+├─ A.png
+├─ B.png
+├─ C.png
+└─ D.png
+```
+
+如果模板不存在，检测层会自动生成基础模板。真实上场前建议用现场规则中的 Arial、200 磅 A/B/C/D 样张替换这些模板，再结合 `output/debug_letters/` 调置信度阈值。
 
 ## 仪表盘识别参数
 
@@ -194,6 +227,7 @@ python -m pytest -q
 - debug frame 保存。
 - TCP 正常连接、JSON 接收、断连重连、超时和空结果。
 - 固定检测结果可被 `RemotePerceptionGateway` 解析。
+- A/B/C/D 字母模板匹配、模板缺失自动生成、debug 图保存。
 - 仪表盘 LOW/NORMAL/HIGH 角度分类。
 
 ## 部署到机器狗上位机

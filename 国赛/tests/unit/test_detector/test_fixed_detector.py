@@ -18,7 +18,8 @@ from perception.remote_gateway import RemotePerceptionConfig, RemotePerceptionGa
 
 def _frame() -> VisionFrame:
     image = _gauge_image(210.0)
-    image[210:270, 250:410, 2] = 255
+    image[40:100, 430:590, 2] = 255
+    _draw_letters(image)
     return VisionFrame(
         frame_id=1,
         timestamp=123.456,
@@ -61,6 +62,27 @@ def _gauge_image(angle_deg: float) -> np.ndarray:
             py = np.clip(ys + dy, 0, 479)
             image[py, px] = (0, 0, 0)
     return image
+
+
+def _draw_letters(image: np.ndarray) -> None:
+    for letter, x, y in (("A", 28, 24), ("B", 120, 24), ("C", 28, 360), ("D", 120, 360)):
+        mask = _letter_mask(letter, 56, 84)
+        pad = 14
+        image[y - pad:y + mask.shape[0] + pad, x - pad:x + mask.shape[1] + pad] = (245, 245, 245)
+        image[y:y + mask.shape[0], x:x + mask.shape[1]][mask] = (0, 0, 0)
+
+
+def _letter_mask(letter: str, width: int, height: int) -> np.ndarray:
+    patterns = {
+        "A": ["0011100", "0110110", "1100011", "1100011", "1111111", "1100011", "1100011", "1100011", "1100011"],
+        "B": ["1111100", "1100110", "1100011", "1100110", "1111100", "1100110", "1100011", "1100110", "1111100"],
+        "C": ["0011110", "0110011", "1100000", "1100000", "1100000", "1100000", "1100000", "0110011", "0011110"],
+        "D": ["1111000", "1101100", "1100110", "1100011", "1100011", "1100011", "1100110", "1101100", "1111000"],
+    }
+    small = np.array([[ch == "1" for ch in row] for row in patterns[letter]], dtype=bool)
+    y_idx = np.linspace(0, small.shape[0] - 1, height).astype(np.int64)
+    x_idx = np.linspace(0, small.shape[1] - 1, width).astype(np.int64)
+    return small[y_idx][:, x_idx]
 
 
 def test_fixed_detector_returns_structured_data() -> None:
@@ -138,6 +160,57 @@ def test_detect_gauges_returns_empty_when_no_dial() -> None:
 def test_detect_gauges_saves_debug_images() -> None:
     debug_dir = ROOT / "output" / "test_debug_gauge"
     shutil.rmtree(debug_dir, ignore_errors=True)
+
+
+def test_detect_zone_letters_recognizes_synthetic_abcd() -> None:
+    detector = FixedDetectionPipeline()
+    result = detector.detect_zone_letters(_frame())
+    assert result["type"] == "zone_letters"
+    assert [item["zone"] for item in result["detections"]] == ["A", "B", "C", "D"]
+    for item in result["detections"]:
+        assert item["letter"] == item["zone"]
+        assert "bbox" in item
+        assert item["confidence"] >= 0.55
+
+
+def test_detect_zone_letters_returns_empty_without_letters() -> None:
+    detector = FixedDetectionPipeline()
+    blank = VisionFrame(
+        frame_id=4,
+        timestamp=400.0,
+        image=np.full((480, 640, 3), 180, dtype=np.uint8),
+        width=640,
+        height=480,
+        source_type="mock",
+    )
+    result = detector.detect_zone_letters(blank)
+    assert result["type"] == "zone_letters"
+    assert result["detections"] == []
+
+
+def test_detect_zone_letters_generates_missing_templates() -> None:
+    template_dir = ROOT / "output" / "test_letter_templates"
+    shutil.rmtree(template_dir, ignore_errors=True)
+    detector = FixedDetectionPipeline(FixedDetectionConfig(letter_template_dir=str(template_dir)))
+    result = detector.detect_zone_letters(_frame())
+    assert [item["zone"] for item in result["detections"]] == ["A", "B", "C", "D"]
+    for letter in ("A", "B", "C", "D"):
+        assert (template_dir / f"{letter}.png").exists()
+    shutil.rmtree(template_dir, ignore_errors=True)
+
+
+def test_detect_zone_letters_saves_debug_images() -> None:
+    debug_dir = ROOT / "output" / "test_debug_letters"
+    shutil.rmtree(debug_dir, ignore_errors=True)
+    detector = FixedDetectionPipeline(FixedDetectionConfig(
+        letter_debug_save_roi=True,
+        letter_debug_dir=str(debug_dir),
+    ))
+    result = detector.detect_zone_letters(_frame())
+    assert result["detections"]
+    saved = list(debug_dir.glob("letter_*"))
+    assert saved
+    shutil.rmtree(debug_dir, ignore_errors=True)
     detector = FixedDetectionPipeline(FixedDetectionConfig(
         gauge_debug_save_roi=True,
         gauge_debug_dir=str(debug_dir),
@@ -170,6 +243,7 @@ def test_remote_gateway_parses_fixed_detector_json() -> None:
 
     letters = gateway._parse_zone_letters(detector.detect_zone_letters(frame))  # noqa: SLF001
     assert [item.zone.value for item in letters] == ["A", "B", "C", "D"]
+    assert letters[0].bbox is not None
 
     gauges = gateway._parse_gauges(detector.detect_gauges(frame))  # noqa: SLF001
     assert gauges[0].zone.value == "A"

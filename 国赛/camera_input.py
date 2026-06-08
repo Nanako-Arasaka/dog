@@ -145,6 +145,7 @@ class CameraInput:
         x2 = min(x + 80, self._cfg.width)
         image[self._cfg.height // 3:self._cfg.height // 3 + 60, x:x2, :] = (0, 0, 255)
         self._draw_mock_gauge(image)
+        self._draw_mock_letters(image)
         return image
 
     def _draw_mock_gauge(self, image: np.ndarray) -> None:
@@ -169,6 +170,28 @@ class CameraInput:
                 px = np.clip(xs + dx, 0, w - 1)
                 py = np.clip(ys + dy, 0, h - 1)
                 image[py, px] = (0, 0, 0)
+
+    def _draw_mock_letters(self, image: np.ndarray) -> None:
+        h, w = image.shape[:2]
+        positions = [
+            ("A", int(w * 0.58), int(h * 0.14)),
+            ("B", int(w * 0.74), int(h * 0.14)),
+            ("C", int(w * 0.58), int(h * 0.48)),
+            ("D", int(w * 0.74), int(h * 0.48)),
+        ]
+        for letter, x, y in positions:
+            mask = _letter_mask(letter, width=48, height=72)
+            pad = 12
+            bg_y1 = max(0, y - pad)
+            bg_x1 = max(0, x - pad)
+            bg_y2 = min(h, y + mask.shape[0] + pad)
+            bg_x2 = min(w, x + mask.shape[1] + pad)
+            image[bg_y1:bg_y2, bg_x1:bg_x2] = (245, 245, 245)
+            y2 = min(y + mask.shape[0], h)
+            x2 = min(x + mask.shape[1], w)
+            sub = mask[:y2 - y, :x2 - x]
+            patch = image[y:y2, x:x2]
+            patch[sub] = (0, 0, 0)
 
     def _preprocess(self, image: np.ndarray) -> np.ndarray:
         if self._cfg.roi is not None:
@@ -219,6 +242,19 @@ class CameraInput:
         rgb = image[:, :, ::-1] if image.shape[2] == 3 else image
         header = f"P6\n{image.shape[1]} {image.shape[0]}\n255\n".encode("ascii")
         path.write_bytes(header + np.ascontiguousarray(rgb).tobytes())
+
+
+def _letter_mask(letter: str, width: int, height: int) -> np.ndarray:
+    patterns = {
+        "A": ["0011100", "0110110", "1100011", "1100011", "1111111", "1100011", "1100011", "1100011", "1100011"],
+        "B": ["1111100", "1100110", "1100011", "1100110", "1111100", "1100110", "1100011", "1100110", "1111100"],
+        "C": ["0011110", "0110011", "1100000", "1100000", "1100000", "1100000", "1100000", "0110011", "0011110"],
+        "D": ["1111000", "1101100", "1100110", "1100011", "1100011", "1100011", "1100110", "1101100", "1111000"],
+    }
+    small = np.array([[ch == "1" for ch in row] for row in patterns[letter]], dtype=bool)
+    y_idx = np.linspace(0, small.shape[0] - 1, height).astype(np.int64)
+    x_idx = np.linspace(0, small.shape[1] - 1, width).astype(np.int64)
+    return small[y_idx][:, x_idx]
 
 
 def parse_roi(raw: str) -> tuple[int, int, int, int] | None:

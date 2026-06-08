@@ -54,6 +54,10 @@ class ServerConfig:
     save_debug_frames: bool
     debug_dir: str
     save_every: int
+    letter_min_confidence: float
+    letter_template_dir: str
+    letter_debug_save_roi: bool
+    letter_debug_dir: str
     gauge_low_angle_range: tuple[float, float]
     gauge_normal_angle_range: tuple[float, float]
     gauge_high_angle_range: tuple[float, float]
@@ -79,6 +83,10 @@ class VisionServer:
         ))
         self._detector = FixedDetectionPipeline(FixedDetectionConfig(
             empty_results=cfg.empty_results,
+            letter_min_confidence=cfg.letter_min_confidence,
+            letter_template_dir=cfg.letter_template_dir,
+            letter_debug_save_roi=cfg.letter_debug_save_roi,
+            letter_debug_dir=cfg.letter_debug_dir,
             gauge_low_angle_range=cfg.gauge_low_angle_range,
             gauge_normal_angle_range=cfg.gauge_normal_angle_range,
             gauge_high_angle_range=cfg.gauge_high_angle_range,
@@ -167,6 +175,10 @@ def parse_args() -> ServerConfig:
     parser.add_argument("--debug-dir", default="output/debug_frames")
     parser.add_argument("--save-every", type=int, default=30)
     parser.add_argument("--empty-results", action="store_true")
+    parser.add_argument("--letter-min-confidence", type=float, default=0.55)
+    parser.add_argument("--letter-template-dir", default="assets/templates/letters")
+    parser.add_argument("--letter-debug-save-roi", action="store_true")
+    parser.add_argument("--letter-debug-dir", default="output/debug_letters")
     parser.add_argument("--gauge-low-angle-range", default="180,250")
     parser.add_argument("--gauge-normal-angle-range", default="250,310")
     parser.add_argument("--gauge-high-angle-range", default="310,30")
@@ -197,6 +209,10 @@ def parse_args() -> ServerConfig:
         save_debug_frames=args.save_debug_frames,
         debug_dir=args.debug_dir,
         save_every=args.save_every,
+        letter_min_confidence=args.letter_min_confidence,
+        letter_template_dir=args.letter_template_dir,
+        letter_debug_save_roi=args.letter_debug_save_roi,
+        letter_debug_dir=args.letter_debug_dir,
         gauge_low_angle_range=_parse_angle_range(args.gauge_low_angle_range),
         gauge_normal_angle_range=_parse_angle_range(args.gauge_normal_angle_range),
         gauge_high_angle_range=_parse_angle_range(args.gauge_high_angle_range),

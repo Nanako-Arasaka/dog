@@ -154,9 +154,11 @@ class RemotePerceptionGateway(PerceptionGateway):
         for d in dets:
             zone_str = str(d.get("zone", "")).upper()
             if zone_str in ("A", "B", "C", "D"):
+                b = d.get("bbox", {})
                 results.append(ZoneLetterResult(
                     zone=Zone(zone_str),
                     confidence=float(d.get("confidence", 0)),
+                    bbox=BBox(b.get("x1", 0), b.get("y1", 0), b.get("x2", 0), b.get("y2", 0)) if b else None,
                     timestamp=float(resp.get("timestamp", time.time())),
                 ))
         return results
