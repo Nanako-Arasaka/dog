@@ -5,11 +5,9 @@ It must not control the robot, arm, or speaker.
 
 Protocol: JSON Lines over TCP.
 Request examples:
-  {"req": "detect_obstacles"}
   {"req": "detect_zone_letters"}
   {"req": "detect_gauges"}
-  {"req": "detect_red_strips"}
-  {"req": "estimate_target_pose", "target": "strip"}
+  {"req": "poll_inspection"}
 """
 
 from __future__ import annotations

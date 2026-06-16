@@ -1,16 +1,10 @@
 """语音播报硬件抽象接口 —— 基于预录音频文件播放。
 
-预录音频文件（12 条固定播报 + 通用提示）：
+预录音频文件（12 条固定播报）：
   A_low.wav, A_normal.wav, A_high.wav,
   B_low.wav, B_normal.wav, B_high.wav,
   C_low.wav, C_normal.wav, C_high.wav,
-  D_low.wav, D_normal.wav, D_high.wav,
-  obstacle_cleared.wav, obstacle_detected.wav,
-  inspection_start.wav, inspection_complete.wav,
-  all_normal.wav, pickup_start.wav,
-  pickup_success_A.wav, pickup_success_B.wav, pickup_success_C.wav, pickup_success_D.wav,
-  drop_warning_1.wav, drop_warning_2.wav, drop_warning_3.wav,
-  drop_limit.wav, task_failed.wav, task_complete.wav
+  D_low.wav, D_normal.wav, D_high.wav
 """
 
 from __future__ import annotations
@@ -38,7 +32,7 @@ class SpeakerGateway(ABC):
         """播放预录音频文件（非阻塞）。
 
         Args:
-            audio_key: 音频标识，如 "A_low", "obstacle_cleared"。
+            audio_key: 音频标识，如 "A_low"。
         """
         ...
 
@@ -64,7 +58,6 @@ class AudioFileSpeaker(SpeakerGateway):
     音频文件目录结构：
       audio/
         A_low.wav, A_normal.wav, A_high.wav, ...
-        obstacle_cleared.wav, ...
     """
 
     def __init__(self, cfg: SpeakerConfig) -> None:

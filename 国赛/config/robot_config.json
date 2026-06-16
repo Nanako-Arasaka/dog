@@ -1,26 +1,10 @@
 {
-  "robot": {
-    "ip": "192.168.1.120",
-    "command_port": 43893,
-    "local_ip": "0.0.0.0",
-    "local_telemetry_port": 43897
-  },
-  "timing": {
-    "heartbeat_hz": 2.0,
-    "main_loop_hz": 20.0
-  },
   "camera": {
     "driver": "mock",
     "serial": "",
     "width": 640,
     "height": 480,
     "fps": 30
-  },
-  "arm": {
-    "driver": "mock",
-    "port": "/dev/ttyUSB0",
-    "baudrate": 115200,
-    "dh_params": []
   },
   "speaker": {
     "enabled": false,
@@ -30,15 +14,8 @@
     "save_playback_log": false,
     "playback_log_path": "output/playback_log.jsonl"
   },
-  "mission": {
-    "obstacle_timeout_sec": 90,
-    "inspection_target_count": 4,
-    "inspection_confidence": 0.6,
-    "max_drop_count": 3,
-    "max_retries": 3
-  },
   "perception": {
-    "driver": "mock",
+    "driver": "remote",
     "model_dir": "models/",
     "confidence_threshold": 0.6
   },
@@ -47,6 +24,23 @@
     "port": 9800,
     "timeout_sec": 2.0
   },
-  "scenario_file": "config/scenario_mock.json",
-  "log_telemetry": true
+  "inspection": {
+    "target_count": 4,
+    "confidence": 0.6,
+    "debug_dir": "output/debug_inspection"
+  },
+  "letter": {
+    "min_confidence": 0.55,
+    "template_dir": "assets/templates/letters",
+    "debug_save_roi": false,
+    "debug_dir": "output/debug_letters"
+  },
+  "gauge": {
+    "low_angle_range": [180.0, 250.0],
+    "normal_angle_range": [250.0, 310.0],
+    "high_angle_range": [310.0, 30.0],
+    "min_confidence": 0.55,
+    "debug_save_roi": false,
+    "debug_dir": "output/debug_gauge"
+  }
 }

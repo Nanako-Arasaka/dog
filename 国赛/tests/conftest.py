@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from app.config import (
     AppConfig,
-    ArmConfig,
     CameraConfig,
-    MissionConfig,
     PerceptionConfig,
-    RobotNetworkConfig,
+    RemotePerceptionConfig,
     SpeakerConfig,
-    TimingConfig,
 )
-from hardware.arm.interface import MockArm
 from hardware.camera.interface import MockCamera
 from hardware.speaker.interface import MockSpeaker
 
@@ -33,19 +37,6 @@ def mock_camera(mock_camera_cfg: CameraConfig) -> MockCamera:
 
 
 @pytest.fixture
-def mock_arm_cfg() -> ArmConfig:
-    return ArmConfig(driver="mock")
-
-
-@pytest.fixture
-def mock_arm(mock_arm_cfg: ArmConfig) -> MockArm:
-    arm = MockArm(mock_arm_cfg)
-    arm.connect()
-    yield arm
-    arm.disconnect()
-
-
-@pytest.fixture
 def mock_speaker_cfg() -> SpeakerConfig:
     return SpeakerConfig(enabled=False, engine="mock", language="zh")
 
@@ -59,12 +50,9 @@ def mock_speaker(mock_speaker_cfg: SpeakerConfig) -> MockSpeaker:
 def minimal_app_config(tmp_path) -> AppConfig:
     """最小可用的 AppConfig，用于 CI/测试。"""
     return AppConfig(
-        robot=RobotNetworkConfig(ip="127.0.0.1", command_port=43893, local_ip="0.0.0.0", local_telemetry_port=43897),
-        timing=TimingConfig(heartbeat_hz=2.0, main_loop_hz=20.0),
         camera=CameraConfig(driver="mock"),
-        arm=ArmConfig(driver="mock"),
         speaker=SpeakerConfig(enabled=False, engine="mock"),
-        mission=MissionConfig(),
-        perception=PerceptionConfig(scenario_file=str(tmp_path / "scenario.json")),
+        perception=PerceptionConfig(driver="remote", scenario_file=str(tmp_path / "scenario.json")),
+        remote_perception=RemotePerceptionConfig(host="127.0.0.1", port=9800, timeout_sec=0.2),
         project_root=str(tmp_path),
     )

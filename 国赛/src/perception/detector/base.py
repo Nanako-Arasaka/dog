@@ -17,13 +17,10 @@ T = TypeVar("T")
 class BaseDetector(ABC, Generic[T]):
     """CV 检测器基类。
 
-    所有检测器（锥桶/设备/仪表/OCR/长条）遵循此接口。
+    巡检识别检测器（区域字母/仪表盘）遵循此接口。
     实现：
-    - YOLOConeDetector
-    - YOLOEquipmentDetector
     - AnalogMeterReader
-    - PaddleOCRLocalizer
-    - YOLOStripDetector
+    - ZoneLetterTemplateDetector
     """
 
     @abstractmethod

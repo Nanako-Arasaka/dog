@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "E:\\DOG\\datasets",
+  "weights_dir": "E:\\DOG\\Thedog\\weights",
+  "runs_dir": "E:\\DOG\\Thedog\\runs",
+  "uuid": "b2c01418f5dda60d08464a072266dd9fee99f0d34e8d758da6226d6275f88f6f",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}

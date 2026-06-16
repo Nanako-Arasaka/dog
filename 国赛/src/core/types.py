@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple, TypeAlias
 
@@ -61,53 +61,6 @@ class MeterStatus(str, Enum):
         return cls.NORMAL
 
 
-# ── 任务阶段 ────────────────────────────────────────────
-
-
-class MissionPhase(str, Enum):
-    """国赛任务阶段（10 个执行阶段 + 3 个终态）"""
-
-    INIT = "INIT"
-    OBSTACLE_APPROACH = "OBSTACLE_APPROACH"
-    OBSTACLE_DETECT = "OBSTACLE_DETECT"
-    OBSTACLE_CROSS = "OBSTACLE_CROSS"
-    INSPECTION_NAV = "INSPECTION_NAV"
-    INSPECTION_SCAN = "INSPECTION_SCAN"
-    INSPECTION_READ = "INSPECTION_READ"
-    PICKUP_PLAN = "PICKUP_PLAN"
-    PICKUP_NAV = "PICKUP_NAV"
-    PICKUP_GRAB = "PICKUP_GRAB"
-    PICKUP_TRANSPORT = "PICKUP_TRANSPORT"
-    PICKUP_PLACE = "PICKUP_PLACE"
-    DONE = "DONE"
-    FAILED = "FAILED"
-    STOPPED = "STOPPED"
-
-    @property
-    def is_terminal(self) -> bool:
-        return self in (MissionPhase.DONE, MissionPhase.FAILED, MissionPhase.STOPPED)
-
-
-# ── 抓取结果 ────────────────────────────────────────────
-
-
-class PickupOutcome(str, Enum):
-    SUCCESS = "success"
-    DROP = "drop"
-    RETRY = "retry"
-    ARM_ERROR = "arm_error"
-
-
-# ── 导航状态 ────────────────────────────────────────────
-
-
-class NavigationStatus(str, Enum):
-    MOVING = "moving"
-    ARRIVED = "arrived"
-    BLOCKED = "blocked"
-    LOST = "lost"
-
-
 # ── BBox ─────────────────────────────────────────────────
 
 
@@ -156,35 +109,6 @@ class InspectionReading:
 
 
 @dataclass(frozen=True)
-class ConeDetection:
-    """锥桶检测（避障阶段）"""
-
-    bbox: BBox
-    center_3d: tuple[float, float, float]  # (x, y, z) 相机坐标系，单位米
-    confidence: float
-
-
-@dataclass(frozen=True)
-class EquipmentDetection:
-    """电气设备检测（巡检阶段）—— 配电柜或变压器"""
-
-    bbox: BBox
-    equipment_type: str  # "power_cabinet" | "transformer"
-    zone_letter: str | None = None  # OCR 识别后填充
-    zone_confidence: float = 0.0
-
-
-@dataclass(frozen=True)
-class StripDetection:
-    """红色异常长条检测（抓取阶段）"""
-
-    bbox: BBox
-    center_3d: tuple[float, float, float]  # 相机坐标系
-    confidence: float
-    timestamp: float = 0.0
-
-
-@dataclass(frozen=True)
 class ZoneLetterResult:
     """区域字母识别结果"""
 
@@ -209,52 +133,6 @@ class GaugeReading:
             f"{self.zone.value}区域仪表盘显示{self.status.cn_display}"
             f"，状态{self.status.cn_health}"
         )
-
-
-@dataclass(frozen=True)
-class TargetPose:
-    """机械臂目标位姿估计（抓取/放置用）"""
-
-    x: float
-    y: float
-    z: float
-    roll: float = 0.0
-    pitch: float = 0.0
-    yaw: float = 0.0
-    confidence: float = 0.0
-    timestamp: float = 0.0
-
-
-# ── 位姿 ────────────────────────────────────────────────
-
-
-@dataclass
-class RobotPose:
-    """机器人位姿（世界坐标系）"""
-
-    x: float = 0.0  # 米
-    y: float = 0.0
-    yaw: float = 0.0  # 弧度
-    timestamp: float = 0.0
-
-
-@dataclass(frozen=True)
-class ArmPose:
-    """机械臂末端位姿（基座坐标系）"""
-
-    x: float
-    y: float
-    z: float
-    roll: float = 0.0
-    pitch: float = 0.0
-    yaw: float = 0.0
-
-
-@dataclass(frozen=True)
-class JointAngles:
-    """机械臂关节角度"""
-
-    joints: tuple[float, ...]  # 弧度
 
 
 @dataclass(frozen=True)

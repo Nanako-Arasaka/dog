@@ -3,28 +3,21 @@
 通信协议（JSON over TCP，每行一条消息）：
 
   机器狗 → 算力板 (请求):
-    {"req": "detect_obstacles"}
     {"req": "detect_zone_letters"}
     {"req": "detect_gauges"}
     {"req": "poll_inspection"}
-    {"req": "detect_red_strips"}
-    {"req": "estimate_target_pose", "target": "strip" | "bin"}
 
   算力板 → 机器狗 (响应):
-    {"type": "obstacles",    "detections": [...], "timestamp": 1.23}
     {"type": "zone_letters", "detections": [...], "timestamp": 1.23}
     {"type": "gauges",       "detections": [...], "timestamp": 1.23}
     {"type": "inspection_results", "results": [...], "timestamp": 1.23}
-    {"type": "red_strips",   "detections": [...], "timestamp": 1.23}
-    {"type": "target_pose",  "pose": {...}, "confidence": 0.9, "timestamp": 1.23}
     {"type": "error", "message": "..."}
 
 算力板的职责：
   - 相机取流
-  - YOLO 锥桶检测
-  - A/B/C/D 字母 OCR
+  - A/B/C/D 字母识别
   - 仪表盘读数
-  - 红色长条检测 + 深度/3D 坐标估计
+  - 巡检结果融合
 
 机器狗本地的职责：
   - 发送请求
@@ -46,12 +39,9 @@ import numpy as np
 
 from core.types import (
     BBox,
-    ConeDetection,
     GaugeReading,
     InspectionReading,
     MeterStatus,
-    StripDetection,
-    TargetPose,
     Zone,
     ZoneLetterResult,
 )
@@ -82,11 +72,8 @@ class RemotePerceptionGateway(PerceptionGateway):
         self._connected = False
 
         # 结果缓存
-        self._cache_obstacles: list[ConeDetection] = []
         self._cache_zone_letters: list[ZoneLetterResult] = []
         self._cache_gauges: list[GaugeReading] = []
-        self._cache_red_strips: list[StripDetection] = []
-        self._cache_target_pose: TargetPose | None = None
 
         # 巡检轮询
         self._inspection_queue: list[InspectionReading] = []
@@ -138,18 +125,6 @@ class RemotePerceptionGateway(PerceptionGateway):
                 return None
 
     # ── 请求 → 结构化结果 映射 ──
-
-    def _parse_obstacles(self, resp: dict) -> list[ConeDetection]:
-        dets = resp.get("detections", [])
-        results = []
-        for d in dets:
-            b = d.get("bbox", {})
-            results.append(ConeDetection(
-                bbox=BBox(b.get("x1", 0), b.get("y1", 0), b.get("x2", 0), b.get("y2", 0)),
-                center_3d=tuple(d.get("center_3d", [0, 0, 0]))[:3],  # type: ignore[arg-type]
-                confidence=float(d.get("confidence", 0)),
-            ))
-        return results
 
     def _parse_zone_letters(self, resp: dict) -> list[ZoneLetterResult]:
         dets = resp.get("detections", [])
@@ -207,45 +182,7 @@ class RemotePerceptionGateway(PerceptionGateway):
             ))
         return results
 
-    def _parse_red_strips(self, resp: dict) -> list[StripDetection]:
-        dets = resp.get("detections", [])
-        results = []
-        for d in dets:
-            b = d.get("bbox", {})
-            results.append(StripDetection(
-                bbox=BBox(b.get("x1", 0), b.get("y1", 0), b.get("x2", 0), b.get("y2", 0)),
-                center_3d=tuple(d.get("center_3d", [0, 0, 0]))[:3],  # type: ignore[arg-type]
-                confidence=float(d.get("confidence", 0)),
-                timestamp=float(resp.get("timestamp", time.time())),
-            ))
-        return results
-
-    def _parse_target_pose(self, resp: dict) -> TargetPose | None:
-        pose = resp.get("pose")
-        if pose is None:
-            return None
-        return TargetPose(
-            x=float(pose.get("x", 0)),
-            y=float(pose.get("y", 0)),
-            z=float(pose.get("z", 0)),
-            roll=float(pose.get("roll", 0)),
-            pitch=float(pose.get("pitch", 0)),
-            yaw=float(pose.get("yaw", 0)),
-            confidence=float(resp.get("confidence", 0)),
-            timestamp=float(resp.get("timestamp", time.time())),
-        )
-
     # ── PerceptionGateway 实现 ──
-
-    def detect_obstacles(self, rgb: np.ndarray | None = None) -> list[ConeDetection]:
-        resp = self._request({"req": "detect_obstacles"})
-        if resp is None or resp.get("type") == "error":
-            return self._cache_obstacles  # 返回旧缓存
-        self._cache_obstacles = self._parse_obstacles(resp)
-        return self._cache_obstacles
-
-    def obstacle_cleared(self) -> bool:
-        return len(self.detect_obstacles()) == 0
 
     def detect_zone_letters(self, rgb: np.ndarray | None = None) -> list[ZoneLetterResult]:
         resp = self._request({"req": "detect_zone_letters"})
@@ -285,20 +222,6 @@ class RemotePerceptionGateway(PerceptionGateway):
         item = self._inspection_queue[self._inspection_cursor]
         self._inspection_cursor += 1
         return [item]
-
-    def detect_red_strips(self, rgb: np.ndarray | None = None) -> list[StripDetection]:
-        resp = self._request({"req": "detect_red_strips"})
-        if resp is None or resp.get("type") == "error":
-            return self._cache_red_strips
-        self._cache_red_strips = self._parse_red_strips(resp)
-        return self._cache_red_strips
-
-    def estimate_target_pose(self, rgb: np.ndarray | None = None) -> TargetPose | None:
-        resp = self._request({"req": "estimate_target_pose", "target": "strip"})
-        if resp is None or resp.get("type") == "error":
-            return self._cache_target_pose
-        self._cache_target_pose = self._parse_target_pose(resp)
-        return self._cache_target_pose
 
     def is_ready(self) -> bool:
         return self._connected or self._connect()

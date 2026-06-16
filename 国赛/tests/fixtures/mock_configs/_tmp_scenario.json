@@ -1,1 +1,0 @@
-{"obstacle": {"clear_after_ticks": 5}, "inspection_readings": [{"zone": "A", "status": "low", "confidence": 0.7}, {"zone": "B", "status": "normal", "confidence": 0.95}, {"zone": "C", "status": "normal", "confidence": 0.95}, {"zone": "D", "status": "normal", "confidence": 0.95}], "pickup_outcomes": {}, "cones": [], "red_strips": []}

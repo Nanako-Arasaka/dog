@@ -1,8 +1,9 @@
 """Fixed first-stage detectors for the compute-board vision server.
 
 These detectors are intentionally simple. They provide stable structured
-outputs for the remote-perception contract before YOLO/OCR/meter models are
-integrated.
+outputs for the remote-perception contract before full OCR/meter models are
+integrated. This module is intentionally limited to inspection recognition:
+zone letters, gauges, and fused inspection results.
 """
 
 from __future__ import annotations
@@ -48,38 +49,13 @@ class FixedDetectionPipeline:
 
     def handle(self, request: dict[str, Any], frame: VisionFrame | None) -> dict[str, Any]:
         req = str(request.get("req", ""))
-        if req == "detect_obstacles":
-            return self.detect_obstacles(frame)
         if req == "detect_zone_letters":
             return self.detect_zone_letters(frame)
         if req == "detect_gauges":
             return self.detect_gauges(frame)
         if req == "poll_inspection":
             return self.poll_inspection(frame)
-        if req == "detect_red_strips":
-            return self.detect_red_strips(frame)
-        if req == "estimate_target_pose":
-            return self.estimate_target_pose(frame, str(request.get("target", "strip")))
         return {"type": "error", "message": f"unknown request: {req}", "timestamp": _timestamp(frame)}
-
-    def detect_obstacles(self, frame: VisionFrame | None) -> dict[str, Any]:
-        if frame is None or self._cfg.empty_results:
-            return empty_response("detect_obstacles")
-        w, h = frame.width, frame.height
-        return {
-            "type": "obstacles",
-            "detections": [
-                {
-                    "object_type": "cone",
-                    "bbox": _bbox(w, h, 0.42, 0.42, 0.54, 0.82),
-                    "center_3d": [0.15, 0.0, 1.2],
-                    "pose": {"x": 0.15, "y": 0.0, "z": 1.2},
-                    "confidence": 0.92,
-                    "timestamp": frame.timestamp,
-                }
-            ],
-            "timestamp": frame.timestamp,
-        }
 
     def detect_zone_letters(self, frame: VisionFrame | None) -> dict[str, Any]:
         if frame is None or self._cfg.empty_results:
@@ -149,79 +125,16 @@ class FixedDetectionPipeline:
             "timestamp": frame.timestamp,
         }
 
-    def detect_red_strips(self, frame: VisionFrame | None) -> dict[str, Any]:
-        if frame is None or self._cfg.empty_results:
-            return empty_response("detect_red_strips")
-
-        strip = _detect_red_region(frame)
-        if strip is None:
-            strip = {
-                "bbox": _bbox(frame.width, frame.height, 0.36, 0.42, 0.66, 0.58),
-                "center_3d": [0.05, 0.0, 0.28],
-                "confidence": 0.82,
-            }
-
-        return {
-            "type": "red_strips",
-            "detections": [
-                {
-                    "object_type": "red_strip",
-                    "bbox": strip["bbox"],
-                    "center_3d": strip["center_3d"],
-                    "pose": {
-                        "x": strip["center_3d"][0],
-                        "y": strip["center_3d"][1],
-                        "z": strip["center_3d"][2],
-                    },
-                    "confidence": strip["confidence"],
-                    "timestamp": frame.timestamp,
-                }
-            ],
-            "timestamp": frame.timestamp,
-        }
-
-    def estimate_target_pose(self, frame: VisionFrame | None, target: str = "strip") -> dict[str, Any]:
-        if frame is None or self._cfg.empty_results:
-            return empty_response("estimate_target_pose")
-
-        strip_resp = self.detect_red_strips(frame)
-        detections = strip_resp.get("detections", [])
-        if target == "strip" and detections:
-            center = detections[0].get("center_3d", [0.05, 0.0, 0.28])
-            conf = float(detections[0].get("confidence", 0.0))
-        else:
-            center = [0.0, 0.0, 0.1]
-            conf = 0.6
-        return {
-            "type": "target_pose",
-            "pose": {
-                "x": center[0],
-                "y": center[1],
-                "z": center[2],
-                "roll": 0.0,
-                "pitch": 0.0,
-                "yaw": 0.0,
-            },
-            "object_type": target,
-            "confidence": conf,
-            "timestamp": frame.timestamp,
-        }
 
 
 def empty_response(req: str) -> dict[str, Any]:
     ts = time.time()
-    if req == "detect_obstacles":
-        return {"type": "obstacles", "detections": [], "timestamp": ts}
     if req == "detect_zone_letters":
         return {"type": "zone_letters", "detections": [], "timestamp": ts}
     if req == "detect_gauges":
         return {"type": "gauges", "detections": [], "timestamp": ts}
     if req == "poll_inspection":
         return {"type": "inspection_results", "results": [], "detections": [], "timestamp": ts}
-    if req == "detect_red_strips":
-        return {"type": "red_strips", "detections": [], "timestamp": ts}
-    if req == "estimate_target_pose":
-        return {"type": "target_pose", "pose": None, "confidence": 0.0, "timestamp": ts}
     return {"type": "error", "message": f"unknown request: {req}", "timestamp": ts}
 
 
@@ -254,15 +167,22 @@ def fuse_inspection_results(
         zone = str(letter.get("zone", "")).upper()
         status = str(gauge.get("status", "normal")).lower()
         confidence = min(float(letter.get("confidence", 0.0)), float(gauge.get("confidence", 0.0)))
+        abnormal = status in {"low", "high"}
+        text = _inspection_text(zone, status, abnormal)
         result = {
             "zone": zone,
             "gauge_status": status,
             "status": status,
-            "abnormal": status in {"low", "high"},
+            "abnormal": abnormal,
             "confidence": round(confidence, 4),
             "letter_bbox": letter.get("bbox"),
             "gauge_bbox": gauge.get("bbox"),
+            "bbox": {
+                "letter": letter.get("bbox"),
+                "gauge": gauge.get("bbox"),
+            },
             "speak_key": f"{zone}_{status}",
+            "text": text,
             "timestamp": ts,
         }
         results.append(result)
@@ -310,6 +230,16 @@ def _match_letters_to_gauges(
     return result
 
 
+def _inspection_text(zone: str, status: str, abnormal: bool) -> str:
+    status_cn = {
+        "low": "偏低",
+        "normal": "正常",
+        "high": "偏高",
+    }.get(status, status)
+    health = "异常" if abnormal else "正常"
+    return f"{zone}区域仪表盘显示{status_cn}，状态{health}"
+
+
 def _bbox_center(bbox: dict[str, Any]) -> tuple[float, float]:
     return (
         (float(bbox.get("x1", 0)) + float(bbox.get("x2", 0))) / 2.0,
@@ -319,43 +249,6 @@ def _bbox_center(bbox: dict[str, Any]) -> tuple[float, float]:
 
 def _timestamp(frame: VisionFrame | None) -> float:
     return float(frame.timestamp) if frame is not None else time.time()
-
-
-def _bbox(width: int, height: int, x1: float, y1: float, x2: float, y2: float) -> dict[str, int]:
-    return {
-        "x1": int(width * x1),
-        "y1": int(height * y1),
-        "x2": int(width * x2),
-        "y2": int(height * y2),
-    }
-
-
-def _detect_red_region(frame: VisionFrame) -> dict[str, Any] | None:
-    image = frame.image
-    if image.size == 0 or image.ndim != 3 or image.shape[2] < 3:
-        return None
-
-    # BGR heuristic: red channel high, blue/green lower. This is intentionally
-    # simple and deterministic until a learned red-strip detector is added.
-    blue = image[:, :, 0].astype(np.int16)
-    green = image[:, :, 1].astype(np.int16)
-    red = image[:, :, 2].astype(np.int16)
-    mask = (red > 120) & (red > green + 40) & (red > blue + 40)
-    ys, xs = np.where(mask)
-    if xs.size < 25:
-        return None
-
-    x1, x2 = int(xs.min()), int(xs.max())
-    y1, y2 = int(ys.min()), int(ys.max())
-    cx = ((x1 + x2) / 2.0 - frame.width / 2.0) / max(frame.width, 1)
-    cy = ((y1 + y2) / 2.0 - frame.height / 2.0) / max(frame.height, 1)
-    area_ratio = float(xs.size) / float(max(frame.width * frame.height, 1))
-    confidence = min(0.98, max(0.55, 0.55 + area_ratio * 4.0))
-    return {
-        "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-        "center_3d": [round(cx, 4), round(cy, 4), 0.28],
-        "confidence": round(confidence, 4),
-    }
 
 
 def _detect_letters_from_frame(frame: VisionFrame, cfg: FixedDetectionConfig) -> list[dict[str, Any]]:

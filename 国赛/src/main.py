@@ -1,12 +1,12 @@
-"""国赛任务入口。
+"""巡检识别闭环本地入口。
 
-加载配置 → 组装 DI 容器 → 启停生命周期。
+完整 TCP 输出由项目根目录的 vision_server.py 提供；此入口只验证配置和
+RemotePerceptionGateway / AudioFileSpeaker 可被装配。
 """
 
 from __future__ import annotations
 
 import logging
-import signal
 from pathlib import Path
 
 from app.config import load_app_config
@@ -24,26 +24,8 @@ def main() -> int:
 
     container = AppContainer(cfg)
 
-    running = True
-
-    def _stop_handler(*_: object) -> None:
-        nonlocal running
-        running = False
-        logging.info("收到停止信号，准备退出...")
-
-    signal.signal(signal.SIGINT, _stop_handler)
-    signal.signal(signal.SIGTERM, _stop_handler)
-
-    container.dog.start_background_loops()
-    container.mission.start()
-
-    try:
-        while running and not container.mission.is_finished:
-            container.mission.tick()
-            container.dog.sleep_for_main_tick()
-    finally:
-        container.mission.stop()
-        container.dog.stop_background_loops()
+    _container = AppContainer(cfg)
+    logging.info("巡检识别闭环组件装配完成。TCP 输出请启动 vision_server.py。")
 
     return 0
 

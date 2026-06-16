@@ -112,10 +112,6 @@ def test_normal_connection_and_json() -> None:
         assert raw["detections"][0]["status"] in {"low", "normal", "high"}
         assert "bbox" in raw["detections"][0]
 
-        obstacles = gw.detect_obstacles()
-        assert len(obstacles) == 1
-        assert obstacles[0].confidence > 0
-
         letters = gw.detect_zone_letters()
         assert len(letters) == 4
 
@@ -123,13 +119,6 @@ def test_normal_connection_and_json() -> None:
         assert len(gauges) >= 1
         assert gauges[0].zone.value == "A"
         assert gauges[0].status.value in {"low", "normal", "high"}
-
-        strips = gw.detect_red_strips()
-        assert len(strips) == 1
-
-        pose = gw.estimate_target_pose()
-        assert pose is not None
-        assert pose.confidence > 0
 
         readings = []
         while True:
@@ -166,8 +155,9 @@ def test_timeout_handling() -> None:
     proc = _start_server(port, ["--response-delay-sec", "1.0"])
     try:
         gw = RemotePerceptionGateway(RemotePerceptionConfig(host="127.0.0.1", port=port, timeout_sec=0.2))
-        assert gw.detect_obstacles() == []
-        assert gw.estimate_target_pose() is None
+        assert gw.detect_zone_letters() == []
+        assert gw.detect_gauges() == []
+        assert gw.poll_inspection() == []
     finally:
         _stop_server(proc)
 
@@ -177,11 +167,9 @@ def test_empty_results() -> None:
     proc = _start_server(port, ["--empty-results"])
     try:
         gw = RemotePerceptionGateway(RemotePerceptionConfig(host="127.0.0.1", port=port, timeout_sec=1.0))
-        assert gw.detect_obstacles() == []
         assert gw.detect_zone_letters() == []
         assert gw.detect_gauges() == []
-        assert gw.detect_red_strips() == []
-        assert gw.estimate_target_pose() is None
+        assert gw.poll_inspection() == []
     finally:
         _stop_server(proc)
 

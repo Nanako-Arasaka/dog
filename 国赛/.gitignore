@@ -6,3 +6,4 @@ output/test_*/
 output/test_*.ppm
 output/debug_*/
 output/playback_log.jsonl
+output/arm_action_log.jsonl

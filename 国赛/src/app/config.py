@@ -15,24 +15,6 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
-class RobotNetworkConfig:
-    """机器狗网络配置"""
-
-    ip: str
-    command_port: int
-    local_ip: str
-    local_telemetry_port: int
-
-
-@dataclass(frozen=True)
-class TimingConfig:
-    """循环频率配置"""
-
-    heartbeat_hz: float = 2.0
-    main_loop_hz: float = 20.0
-
-
-@dataclass(frozen=True)
 class CameraConfig:
     """相机配置"""
 
@@ -41,16 +23,6 @@ class CameraConfig:
     width: int = 640
     height: int = 480
     fps: int = 30
-
-
-@dataclass(frozen=True)
-class ArmConfig:
-    """机械臂配置"""
-
-    driver: str = ""  # 具体型号驱动名
-    port: str = "/dev/ttyUSB0"
-    baudrate: int = 115200
-    dh_params: tuple[tuple[float, ...], ...] = ()  # DH 参数表
 
 
 @dataclass(frozen=True)
@@ -63,27 +35,6 @@ class SpeakerConfig:
     audio_dir: str = "output/audio"
     save_playback_log: bool = False
     playback_log_path: str = "output/playback_log.jsonl"
-
-
-@dataclass(frozen=True)
-class MissionConfig:
-    """任务参数配置"""
-
-    obstacle_timeout_sec: float = 90.0
-    inspection_target_count: int = 4
-    inspection_confidence: float = 0.6
-    max_drop_count: int = 3
-    max_retries: int = 3
-    # 场地坐标（需根据实际场地标定）
-    inspection_target: tuple[float, float] = (1.5, 0.0)
-    pickup_position_for_zone: dict[str, tuple[float, float]] = field(default_factory=lambda: {
-        "A": (2.0, 0.5), "B": (2.0, -0.5),
-        "C": (3.0, 0.5), "D": (3.0, -0.5),
-    })
-    placement_position_for_zone: dict[str, tuple[float, float]] = field(default_factory=lambda: {
-        "A": (4.0, 0.5), "B": (4.0, -0.5),
-        "C": (5.0, 0.5), "D": (5.0, -0.5),
-    })
 
 
 @dataclass(frozen=True)
@@ -109,15 +60,10 @@ class RemotePerceptionConfig:
 class AppConfig:
     """应用总配置"""
 
-    robot: RobotNetworkConfig
-    timing: TimingConfig
     camera: CameraConfig
-    arm: ArmConfig
     speaker: SpeakerConfig
-    mission: MissionConfig
     perception: PerceptionConfig
     remote_perception: RemotePerceptionConfig = field(default_factory=RemotePerceptionConfig)
-    log_telemetry: bool = False
     project_root: str = ""  # 项目根目录，加载时自动填充
 
 
@@ -159,22 +105,6 @@ def load_app_config(config_path: str | Path) -> AppConfig:
     data = json.loads(path.read_text(encoding="utf-8"))
     project_root = str(path.parent.parent)
 
-    # 机器人网络
-    robot_data = data.get("robot", {})
-    robot = RobotNetworkConfig(
-        ip=_get_str(robot_data, "ip", "192.168.1.120"),
-        command_port=_get_int(robot_data, "command_port", 43893),
-        local_ip=_get_str(robot_data, "local_ip", "0.0.0.0"),
-        local_telemetry_port=_get_int(robot_data, "local_telemetry_port", 43897),
-    )
-
-    # 时序
-    timing_data = data.get("timing", {})
-    timing = TimingConfig(
-        heartbeat_hz=_get_float(timing_data, "heartbeat_hz", 2.0),
-        main_loop_hz=_get_float(timing_data, "main_loop_hz", 20.0),
-    )
-
     # 相机
     camera_data = data.get("camera", {})
     camera = CameraConfig(
@@ -183,15 +113,6 @@ def load_app_config(config_path: str | Path) -> AppConfig:
         width=_get_int(camera_data, "width", 640),
         height=_get_int(camera_data, "height", 480),
         fps=_get_int(camera_data, "fps", 30),
-    )
-
-    # 机械臂
-    arm_data = data.get("arm", {})
-    arm = ArmConfig(
-        driver=_get_str(arm_data, "driver", "mock"),
-        port=_get_str(arm_data, "port", "/dev/ttyUSB0"),
-        baudrate=_get_int(arm_data, "baudrate", 115200),
-        dh_params=tuple(tuple(p) for p in arm_data.get("dh_params", [])),
     )
 
     # 语音
@@ -203,16 +124,6 @@ def load_app_config(config_path: str | Path) -> AppConfig:
         audio_dir=_get_str(speaker_data, "audio_dir", "output/audio"),
         save_playback_log=_get_bool(speaker_data, "save_playback_log", False),
         playback_log_path=_get_str(speaker_data, "playback_log_path", "output/playback_log.jsonl"),
-    )
-
-    # 任务参数
-    mission_data = data.get("mission", {})
-    mission = MissionConfig(
-        obstacle_timeout_sec=_get_float(mission_data, "obstacle_timeout_sec", 90.0),
-        inspection_target_count=_get_int(mission_data, "inspection_target_count", 4),
-        inspection_confidence=_get_float(mission_data, "inspection_confidence", 0.6),
-        max_drop_count=_get_int(mission_data, "max_drop_count", 3),
-        max_retries=_get_int(mission_data, "max_retries", 3),
     )
 
     # 感知
@@ -234,17 +145,10 @@ def load_app_config(config_path: str | Path) -> AppConfig:
         timeout_sec=_get_float(remote_data, "timeout_sec", 2.0),
     )
 
-    log_telemetry = _get_bool(data, "log_telemetry", False)
-
     return AppConfig(
-        robot=robot,
-        timing=timing,
         camera=camera,
-        arm=arm,
         speaker=speaker,
-        mission=mission,
         perception=perception,
         remote_perception=remote_perception,
-        log_telemetry=log_telemetry,
         project_root=project_root,
     )

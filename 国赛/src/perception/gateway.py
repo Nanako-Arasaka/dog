@@ -1,8 +1,8 @@
 """感知层统一入口 —— 纯检测接口，不做任何运动/机械臂控制。
 
 职责边界：
-  算力板（NVIDIA）→ 相机取流 + 模型推理 → 返回结构化检测结果
-  机器狗本地      → 接收结果 → 决策 → 调运动/机械臂
+  算力板（NVIDIA）→ 相机取流 + 巡检识别 → 返回结构化检测结果
+  机器狗本地      → 接收结果 → 播放 speak_key 对应音频或交给上层决策
 
 PerceptionGateway 的所有方法只返回结构化数据，不产生任何副作用。
 """
@@ -14,15 +14,8 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 from core.types import (
-    BBox,
-    ConeDetection,
-    EquipmentDetection,
     GaugeReading,
     InspectionReading,
-    MeterStatus,
-    StripDetection,
-    TargetPose,
-    Zone,
     ZoneLetterResult,
 )
 
@@ -30,29 +23,9 @@ from core.types import (
 class PerceptionGateway(ABC):
     """感知层抽象 —— 纯检测，不控制任何硬件。
 
-    实现：
-    - JsonScenarioPerception    (JSON 场景仿真)
-    - LocalPerceptionGateway    (本机 CV，相机取流 + 本地推理)
+    当前项目只保留巡检识别闭环：
     - RemotePerceptionGateway   (外接 NVIDIA 算力板，TCP 通信)
     """
-
-    # ── 避障阶段 ────────────────────────────────────────
-
-    @abstractmethod
-    def detect_obstacles(self, rgb: np.ndarray | None = None) -> list[ConeDetection]:
-        """检测障碍物（锥桶），返回按距离排序的检测列表。
-
-        Args:
-            rgb: RGB 图像。None 时由实现自行获取（如远程已持有相机）。
-        Returns:
-            锥桶检测列表（空列表 = 无障碍物）。
-        """
-        ...
-
-    @abstractmethod
-    def obstacle_cleared(self) -> bool:
-        """判断前方路径是否已无障碍物。"""
-        ...
 
     # ── 巡检阶段 ────────────────────────────────────────
 
@@ -81,28 +54,6 @@ class PerceptionGateway(ABC):
 
         在 INSPECTION_READ 阶段每 tick 调用一次，每次返回一个待播报结果。
         返回空列表 = 本轮已无更多读数。
-        """
-        ...
-
-    # ── 抓取阶段 ────────────────────────────────────────
-
-    @abstractmethod
-    def detect_red_strips(self, rgb: np.ndarray | None = None) -> list[StripDetection]:
-        """检测红色异常长条。
-
-        Returns:
-            红色长条检测列表（空 = 视野中未发现）。
-        """
-        ...
-
-    @abstractmethod
-    def estimate_target_pose(self, rgb: np.ndarray | None = None) -> TargetPose | None:
-        """估计当前目标物体（红色长条 or 放置箱）的 3D 位姿。
-
-        用于机械臂抓取前获取目标的 (x, y, z, roll, pitch, yaw)。
-
-        Returns:
-            目标位姿，含置信度。None = 无法估计。
         """
         ...
 
