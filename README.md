@@ -113,6 +113,45 @@ python3 start_dog.py \
 3. **抓取红条** — 机械臂抓取红色长条并持续保持夹紧。
 4. **目标放置** — Jetson 在放置区识别纸箱字母，状态转发层发布目标区域，机械臂确认匹配后松爪。
 
+### 项目架构
+
+```text
+摄像头
+  -> Jetson 视觉识别：巡检 / 锥桶 / 放置区字母
+  -> integration_bridge：状态格式统一与 ROS2 topic 转发
+  -> arm_grasp：红条抓取、保持夹紧、匹配目标区后放置
+  -> controller：SLAM/目标点控制/速度指令
+  -> 狗本体：底层运动执行与 watchdog 安全停机
+```
+
+### 启动环境
+
+- Jetson Xavier NX，Ubuntu Linux，Python 3.8+。
+- Python 依赖：`numpy`、`opencv-python`、`torch`、`ultralytics`、`pytest`。
+- ROS2 环境：机械臂和状态转发联调需要 `rclpy`、`std_msgs`，推荐 Humble。
+- 狗端仅运行轻量运动接收程序和安全停机逻辑，不建议运行 YOLO、OpenCV 读表或 SLAM。
+
+### 常用启动指令
+
+```bash
+cd /home/jetson/yolo_deploy
+python3 integration_bridge/bridge_node.py
+python3 live_detect_yolo_opencv.py
+```
+
+```bash
+cd /home/jetson/arm_grasp
+source /opt/ros/humble/setup.bash
+colcon build
+source install/setup.bash
+ros2 launch arm_grasp jetarm_grasp.launch.py
+```
+
+```bash
+cd /home/jetson/controller
+python3 lite2_motion_receiver.py --listen-port 5005 --dry-run
+```
+
 详见 [国赛/README.md](国赛/README.md)
 
 ---
