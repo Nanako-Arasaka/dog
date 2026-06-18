@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+节点1: 视觉识别节点 (vision_node)
+功能: 接收检测请求 → 识别指定颜色长条 → 计算3D抓取位姿
+国赛规则: 检测红色(异常)长条, 100×50×50mm竖放
+
+订阅: /rgbd_cam/color/image_rect_color, /rgbd_cam/depth/image_raw,
+      /rgbd_cam/color/camera_info, /vision/detect_request (String),
+      /inspection/all (String)
+发布: /vision/grasp_pose (String), /vision/debug_image (Image)
+"""
+
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, CameraInfo
+from std_msgs.msg import String
+from cv_bridge import CvBridge
+import cv2
+import numpy as np
+import yaml
+import os
+
+
+class VisionNode(Node):
+
+    def __init__(self):
+        super().__init__('vision_node')
+
+        # 加载配置
+        config_path = self.declare_parameter('config_path', '').value
+        if config_path and os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = yaml.safe_load(f)
+        else:
+            cfg = {}
+
+        obj_cfg = cfg.get('object_config', {})
+        self.hsv = obj_cfg.get('hsv_ranges', {
+            'red': {'lower': [0, 120, 100], 'upper': [10, 255, 255],
+                    'lower2': [170, 120, 100], 'upper2': [180, 255, 255]},
+            'green': {'lower': [40, 80, 80], 'upper': [85, 255, 255]}
+        })
+        self.obj_h = obj_cfg.get('height', 0.05)
+        self.grasp_h = obj_cfg.get('grasp_height', 0.075)
+        platform_cfg = cfg.get('platform_config', {})
+        self.platform_h = platform_cfg.get('height', 0.5)
+
+        # 相机→机械臂变换 (需实测校准)
+        cam2arm = cfg.get('camera_to_arm', {})
+        self.cam2arm = np.array([cam2arm.get('x', 0.1),
+                                 cam2arm.get('y', 0.0),
+                                 cam2arm.get('z', -0.15)])
+
+        # 参数
+        self.target_color = self.declare_parameter('target_color', 'red').value
+        self.min_area = self.declare_parameter('min_area', 500).value
+        self.min_conf = self.declare_parameter('min_confidence', 0.3).value
+
+        # 状态
+        self.bridge = CvBridge()
+        self.cam_K = None
+        self.color_img = None
+        self.depth_img = None
+        self.pending_request = None   # 待处理的检测请求颜色
+
+        # 订阅 — 相机
+        self.create_subscription(Image, '/rgbd_cam/color/image_rect_color',
+                                 self._cb_color, 10)
+        self.create_subscription(Image, '/rgbd_cam/depth/image_raw',
+                                 self._cb_depth, 10)
+        self.create_subscription(CameraInfo, '/rgbd_cam/color/camera_info',
+                                 self._cb_info, 10)
+
+        # 订阅 — 检测请求
+        self.create_subscription(String, '/vision/detect_request',
+                                 self._cb_detect_req, 10)
+        # 订阅 — 巡检结果(备用颜色触发)
+        self.create_subscription(String, '/inspection/all',
+                                 self._cb_inspection, 10)
+
+        # 发布
+        self.pub_pose = self.create_publisher(String, '/vision/grasp_pose', 10)
+        self.pub_dbg = self.create_publisher(Image, '/vision/debug_image', 10)
+
+        # 主循环 (10Hz)
+        self.create_timer(0.1, self._timer)
+        self.get_logger().info('[视觉节点] 就绪，等待检测请求...')
+
+    # ── 回调 ────────────────────────────────
+
+    def _cb_color(self, msg):
+        try:
+            self.color_img = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except:
+            pass
+
+    def _cb_depth(self, msg):
+        try:
+            self.depth_img = self.bridge.imgmsg_to_cv2(msg, '16UC1')
+        except:
+            pass
+
+    def _cb_info(self, msg):
+        if self.cam_K is None:
+            self.cam_K = np.array(msg.k).reshape(3, 3)
+            self.get_logger().info(f'[视觉节点] 相机内参已加载 fx={self.cam_K[0,0]:.1f}')
+
+    def _cb_detect_req(self, msg):
+        """接收检测请求: 'red' 或 'green'"""
+        color = msg.data.strip().lower()
+        if color in ('red', 'green'):
+            self.pending_request = color
+            self.get_logger().info(f'[视觉节点] 收到检测请求: {color}')
+
+    def _cb_inspection(self, msg):
+        """从巡检结果推断目标颜色(异常=red)"""
+        # 只在没有显式请求时作为后备
+        if self.pending_request is not None:
+            return
+        if 'abnormal' in msg.data.lower():
+            self.pending_request = 'red'
+            self.get_logger().info('[视觉节点] 从巡检结果触发红色检测')
+
+    # ── 检测核心 ────────────────────────────
+
+    def _detect(self, img, color):
+        """HSV 颜色分割 + 轮廓筛选"""
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+
+        r = self.hsv.get(color, {})
+        m1 = cv2.inRange(hsv, np.array(r['lower']), np.array(r['upper']))
+        mask = cv2.bitwise_or(mask, m1)
+        if 'lower2' in r:
+            m2 = cv2.inRange(hsv, np.array(r['lower2']), np.array(r['upper2']))
+            mask = cv2.bitwise_or(mask, m2)
+
+        k = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        objs = []
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if area < self.min_area:
+                continue
+            rect = cv2.minAreaRect(c)
+            box = np.int0(cv2.boxPoints(rect))
+            cx, cy = rect[0]
+            w, h = rect[1]
+            angle = rect[2]
+            # 确保 w ≥ h (长边)
+            if w < h:
+                w, h = h, w
+                angle += 90
+            ratio = w / h if h > 0 else 0
+            # 长条宽高比范围 (长100mm / 宽50mm = 2.0, 允许 1.3~3.5)
+            if 1.3 < ratio < 3.5:
+                objs.append({
+                    'cx': int(cx), 'cy': int(cy),
+                    'w': w, 'h': h, 'angle': angle,
+                    'area': area, 'color': color, 'box': box
+                })
+        objs.sort(key=lambda x: x['area'], reverse=True)
+        return objs
+
+    def _sample_depth(self, cx, cy, radius=5):
+        """在 (cx,cy) 周围采样深度中值，避免噪声"""
+        if self.depth_img is None:
+            return 0
+        h, w = self.depth_img.shape
+        x1 = max(0, cx - radius)
+        x2 = min(w, cx + radius + 1)
+        y1 = max(0, cy - radius)
+        y2 = min(h, cy + radius + 1)
+        roi = self.depth_img[y1:y2, x1:x2]
+        valid = roi[(roi > 0) & (roi < 2500)]
+        if len(valid) == 0:
+            return 0
+        return np.median(valid)
+
+    def _to_arm_frame(self, cx, cy):
+        """像素 → 相机坐标 → 机械臂基座坐标"""
+        if self.cam_K is None or self.depth_img is None:
+            return None
+
+        d = self._sample_depth(cx, cy)
+        if d == 0:
+            return None
+
+        # 像素 → 相机坐标系 (m)
+        z_cam = d / 1000.0
+        fx, fy = self.cam_K[0, 0], self.cam_K[1, 1]
+        u0, v0 = self.cam_K[0, 2], self.cam_K[1, 2]
+        x_cam = (cx - u0) * z_cam / fx
+        y_cam = (cy - v0) * z_cam / fy
+
+        # 相机坐标系 → 机械臂基座坐标系
+        p_cam = np.array([x_cam, y_cam, z_cam])
+        p_arm = p_cam + self.cam2arm
+        return (p_arm[0], p_arm[1], p_arm[2])
+
+    # ── 主循环 ──────────────────────────────
+
+    def _timer(self):
+        if self.color_img is None or self.pending_request is None:
+            return
+
+        color = self.pending_request
+        self.pending_request = None  # 清空请求
+
+        objs = self._detect(self.color_img, color)
+        if not objs:
+            self.get_logger().warn(f'[视觉节点] 未检测到{color}色长条')
+            self.pub_pose.publish(String(data='none'))
+            return
+
+        # 选面积最大的
+        best = objs[0]
+        p_arm = self._to_arm_frame(best['cx'], best['cy'])
+        if p_arm is None:
+            self.get_logger().warn('[视觉节点] 深度无效')
+            self.pub_pose.publish(String(data='invalid_depth'))
+            return
+
+        gx, gy, gz = p_arm[0], p_arm[1], p_arm[2]
+        # 抓取点在物体顶部(物体高度 + 抓取余量)
+        gz_grasp = gz + self.grasp_h
+
+        conf = min(best['area'] / 8000, 1.0)
+        if conf < self.min_conf:
+            self.get_logger().warn(f'[视觉节点] 置信度过低 {conf:.2f}')
+            self.pub_pose.publish(String(data='low_conf'))
+            return
+
+        # 发布: arm坐标系抓取位姿 + 像素坐标
+        pose = (f'grasp|{gx:.4f}|{gy:.4f}|{gz_grasp:.4f}|'
+                f'{best["angle"]:.1f}|{conf:.2f}|{best["cx"]}|{best["cy"]}')
+        self.pub_pose.publish(String(data=pose))
+        self.get_logger().info(f'[视觉节点] ★ 抓取位姿(arm系): x={gx:.3f} y={gy:.3f} '
+                               f'z={gz_grasp:.3f} angle={best["angle"]:.0f}° conf={conf:.2f} '
+                               f'像素({best["cx"]},{best["cy"]})')
+
+        # 调试图像
+        vis = self.color_img.copy()
+        for o in objs:
+            c = (0, 0, 255) if o['color'] == 'red' else (0, 255, 0)
+            cv2.drawContours(vis, [o['box']], 0, c, 2)
+            cv2.circle(vis, (o['cx'], o['cy']), 5, (255, 0, 0), -1)
+            cv2.putText(vis, f'{o["area"]:.0f}', (o['cx'] + 10, o['cy'] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, c, 1)
+        try:
+            self.pub_dbg.publish(self.bridge.cv2_to_imgmsg(vis, 'bgr8'))
+        except:
+            pass
+
+
+def main():
+    rclpy.init()
+    node = VisionNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

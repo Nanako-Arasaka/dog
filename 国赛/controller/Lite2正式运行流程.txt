@@ -1,0 +1,355 @@
+# Lite2 + ORB-SLAM3 当前流程与比赛任务流程
+
+重要说明：
+当前代码不是完整比赛任务代码。
+当前代码只完成：
+
+```text
+USB 摄像头 -> ORB-SLAM3 定位 -> 发布 /camera_pose
+-> goal_controller 去一个坐标点
+-> lite2_motion_receiver.py 控制狗运动
+```
+
+也就是说，现在它能测试：
+
+```text
+狗能不能根据 ORB-SLAM3 的位姿走到指定坐标点
+```
+
+它还没有完成：
+
+```text
+目标物识别
+夹取动作
+放置区域识别
+完整任务状态机
+避障路径规划
+```
+
+
+============================================================
+一、当前已实现：SLAM 定位 + 到坐标点
+============================================================
+
+开 4 个终端。
+
+
+终端 1：启动控狗接收器
+
+dry-run 测试：
+
+```bash
+cd ~/Desktop
+python3 lite2_motion_receiver.py --listen-port 5005 --dry-run
+```
+
+正式控狗：
+
+```bash
+cd ~/Desktop
+python3 lite2_motion_receiver.py \
+  --listen-port 5005 \
+  --robot-ip 192.168.1.120 \
+  --robot-port 43893 \
+  --default-speed 9000 \
+  --turn-speed 20000
+```
+
+
+终端 2：启动 USB 摄像头
+
+```bash
+cd ~/usb_camera
+source install/setup.bash
+
+ros2 run usb_cam usb_cam_node_exe --ros-args \
+  --params-file /home/jetson/usb_camera/src/usb_cam-ros2/config/params_1.yaml
+```
+
+检查图像：
+
+```bash
+ros2 topic list
+ros2 topic hz /image_raw
+```
+
+
+终端 3：启动 ORB-SLAM3
+
+```bash
+source /opt/ros/humble/setup.bash
+cd ~/colcon_ws
+source install/setup.bash
+
+ros2 run orbslam3 mono \
+  /home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt \
+  /home/jetson/ORB_SLAM3/Examples/Monocular/TUM1.yaml
+```
+
+检查位姿：
+
+```bash
+ros2 topic info /camera_pose
+ros2 topic echo /camera_pose
+```
+
+正确情况：
+
+```text
+Publisher count: 1
+```
+
+
+终端 4：启动目标点控制
+
+推荐先用相对目标，避免狗追地图绝对点乱跑。
+
+意思是：
+
+```text
+从当前位姿向前 0.3 米，最多跑 8 秒，到达或超时就停
+```
+
+```bash
+source /opt/ros/humble/setup.bash
+cd ~/colcon_ws
+source install/setup.bash
+
+ros2 run lite2_navigation_bridge goal_controller --ros-args \
+  -p pose_topic:=/camera_pose \
+  -p pose_type:=pose_stamped \
+  -p target_is_relative:=true \
+  -p target_x:=0.3 \
+  -p target_y:=0.0 \
+  -p target_yaw:=0.0 \
+  -p max_vx:=0.10 \
+  -p max_wz:=0.15 \
+  -p goal_tolerance:=0.12 \
+  -p run_timeout:=8.0 \
+  -p receiver_ip:=127.0.0.1 \
+  -p receiver_port:=5005
+```
+
+成功现象：
+
+```text
+receiver 终端出现 reason: go_to_goal
+狗小步移动
+到达后出现 reason: goal_reached
+超时则出现 reason: run_timeout
+```
+
+
+============================================================
+二、真正比赛任务应该长这样
+============================================================
+
+比赛任务不是只去一个坐标点，而应该是：
+
+```text
+1. 启动摄像头和 ORB-SLAM3
+2. 建图 / 定位
+3. 识别目标物
+4. 计算目标物在地图里的坐标
+5. 导航到目标物附近
+6. 执行夹取
+7. 导航到指定放置区域
+8. 执行放置
+9. 停止 / 完成任务
+```
+
+建议后续代码结构：
+
+```text
+WAIT_SLAM
+-> FIND_OBJECT
+-> GO_TO_PICK
+-> PICK_OBJECT
+-> GO_TO_PLACE
+-> PLACE_OBJECT
+-> DONE
+```
+
+
+============================================================
+三、还缺哪些模块
+============================================================
+
+1. 目标物识别
+
+需要明确赛题目标物是什么：
+
+```text
+二维码 / AprilTag / ArUco
+颜色物块
+指定形状物体
+仪表盘 / 标志牌
+其他赛题指定物
+```
+
+如果是二维码或 AprilTag，推荐用标记识别，最稳。
+
+如果是颜色物块，推荐用颜色阈值或 YOLO。
+
+
+2. 目标坐标转换
+
+识别到目标后，需要把目标从图像坐标转换到地图坐标：
+
+```text
+图像里的目标位置
+-> 相机坐标
+-> 机器人/狗坐标
+-> ORB-SLAM3 地图坐标
+```
+
+这一步目前没有实现。
+
+
+3. 夹取控制
+
+需要知道夹爪/机械臂怎么控制：
+
+```text
+串口？
+GPIO？
+ROS topic？
+UDP？
+舵机 PWM？
+```
+
+当前代码没有夹取/放置动作。
+
+
+4. 放置区域
+
+放置区域可以有两种方式：
+
+固定坐标：
+
+```text
+place_x:=...
+place_y:=...
+```
+
+视觉识别：
+
+```text
+识别放置区标志
+再换算到地图坐标
+```
+
+
+============================================================
+四、当前代码在完整任务里的位置
+============================================================
+
+当前 `lite2_navigation_bridge goal_controller` 只等价于：
+
+```text
+GO_TO_PICK 或 GO_TO_PLACE 里的“走到某个坐标点”
+```
+
+当前 `lite2_motion_receiver.py` 只等价于：
+
+```text
+把导航速度转换成绝影 Lite2 UDP 运动指令
+```
+
+它们是底盘移动模块，不是完整比赛任务。
+
+
+============================================================
+五、下一步建议
+============================================================
+
+先不要继续扩大目标点测试。
+
+下一步应该做：
+
+```text
+1. 明确赛题目标物是什么
+2. 明确夹爪怎么控制
+3. 明确放置区域是固定坐标还是视觉识别
+4. 写 task_manager 状态机
+```
+
+推荐新增一个 ROS2 包或节点：
+
+```text
+lite2_task_manager
+```
+
+它负责：
+
+```text
+订阅 /camera_pose
+接收/计算 pick 点
+发送目标给 goal_controller
+到达后执行夹取
+再发送 place 点
+到达后执行放置
+最后停止
+```
+
+
+============================================================
+六、常见错误
+============================================================
+
+1. 一直 waiting_for_pose
+
+检查：
+
+```bash
+ros2 topic info /camera_pose
+ros2 topic echo /camera_pose
+```
+
+
+2. 狗到处跑
+
+原因通常是用了地图绝对坐标。
+
+先用：
+
+```bash
+-p target_is_relative:=true
+-p target_x:=0.3
+```
+
+
+3. 狗一直转圈
+
+检查 receiver 里的 `wz`。
+
+如果 `wz` 很小但还转，增大死区：
+
+```bash
+--normalized-deadband 0.08
+```
+
+
+4. 狗前后反
+
+先不要乱加参数。
+
+看 receiver 输出：
+
+```text
+vx > 0 应该对应 forward > 0
+```
+
+如果 `vx > 0` 却输出 `forward < 0`，说明加了 `--invert-forward`，需要去掉。
+
+
+5. 手动指令没反应
+
+绕过 receiver 直发测试：
+
+```bash
+python3 -c 'import socket,struct; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.sendto(struct.pack("<3i",0x21010202,0,0),("192.168.1.120",43893))'
+```
+
+如果这条也没反应，说明狗端当前没有接收 UDP 控制。
+

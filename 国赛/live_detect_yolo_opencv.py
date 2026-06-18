@@ -4,12 +4,17 @@ from collections import Counter, deque
 import os
 import subprocess
 import time
+from typing import Any, Dict, Tuple
 
 import cv2
 from ultralytics import YOLO
 
 from gauge_reader import read_gauge
 
+
+GaugeResult = Dict[str, Any]
+Box = Tuple[int, int, int, int]
+UnknownCounter = Dict[str, int]
 
 MODEL_PATH = "/home/jetson/yolo_deploy/best.pt"
 CAMERA_ID = 0
@@ -43,9 +48,23 @@ STATUS_CN = {
     "high": "偏高",
     "unknown": "未知",
 }
+DEFAULT_GAUGE_RESULT: GaugeResult = {"angle": None, "status": "unknown", "success": False}
 
 
-def stabilize_gauge_result(raw_result: dict, status_history: deque[str], last_result: dict, unknown_counter: dict) -> dict:
+def status_name(status: str) -> str:
+    return STATUS_CN.get(status, STATUS_CN["unknown"])
+
+
+def format_angle(angle: Any) -> str:
+    return "-" if angle is None else f"{float(angle):.2f}"
+
+
+def stabilize_gauge_result(
+    raw_result: GaugeResult,
+    status_history: deque[str],
+    last_result: GaugeResult,
+    unknown_counter: UnknownCounter,
+) -> GaugeResult:
     status = raw_result.get("status", "unknown")
     if raw_result.get("success") and status != "unknown":
         unknown_counter["count"] = 0
@@ -54,7 +73,7 @@ def stabilize_gauge_result(raw_result: dict, status_history: deque[str], last_re
         unknown_counter["count"] = unknown_counter.get("count", 0) + 1
         if unknown_counter["count"] >= UNKNOWN_RESET_COUNT:
             status_history.clear()
-            result = dict(raw_result)
+            result: GaugeResult = dict(raw_result)
             result["status"] = "unknown"
             result["stable_count"] = 0
             return result
@@ -124,7 +143,7 @@ def open_camera() -> cv2.VideoCapture:
     return cap
 
 
-def draw_text_with_background(frame, text: str, x: int, y: int, color: tuple[int, int, int]) -> None:
+def draw_text_with_background(frame: Any, text: str, x: int, y: int, color: tuple[int, int, int]) -> None:
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = 0.55
     thickness = 2
@@ -136,7 +155,7 @@ def draw_text_with_background(frame, text: str, x: int, y: int, color: tuple[int
     cv2.putText(frame, text, (x + padding, y - padding), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
 
-def clamp_box(box: tuple[int, int, int, int], width: int, height: int) -> tuple[int, int, int, int]:
+def clamp_box(box: Box, width: int, height: int) -> Box:
     x1, y1, x2, y2 = box
     x1 = max(0, min(width - 1, x1))
     y1 = max(0, min(height - 1, y1))
@@ -145,7 +164,7 @@ def clamp_box(box: tuple[int, int, int, int], width: int, height: int) -> tuple[
     return x1, y1, x2, y2
 
 
-def predict_with_fallback(model: YOLO, frame, use_half: bool):
+def predict_with_fallback(model: YOLO, frame: Any, use_half: bool) -> tuple[Any, bool]:
     try:
         results = model.predict(frame, imgsz=IMG_SIZE, conf=CONF_THRES, device=0, half=use_half, verbose=False)
         return results, use_half
@@ -158,17 +177,17 @@ def predict_with_fallback(model: YOLO, frame, use_half: bool):
         raise
 
 
-def draw_overlay(frame, fps: float, object_count: int, zone_name: str | None, gauge_result: dict) -> None:
+def draw_overlay(frame: Any, fps: float, object_count: int, zone_name: str | None, gauge_result: GaugeResult) -> None:
     angle = gauge_result.get("angle")
     status = gauge_result.get("status", "unknown")
-    status_cn = STATUS_CN.get(status, "未知")
+    status_cn = status_name(status)
     stable_count = gauge_result.get("stable_count", 0)
     circle_found = gauge_result.get("circle_found", False)
     lines = [
         f"FPS: {fps:.1f}",
         f"Objects: {object_count}",
         f"Zone: {zone_name or '-'}",
-        f"Gauge angle: {'-' if angle is None else f'{float(angle):.2f}'}",
+        f"Gauge angle: {format_angle(angle)}",
         f"Gauge status: {status} / {status_cn} ({stable_count}/{STATUS_HISTORY_SIZE})",
         f"Circle: {'ok' if circle_found else 'fallback'}",
     ]
@@ -178,13 +197,13 @@ def draw_overlay(frame, fps: float, object_count: int, zone_name: str | None, ga
         y += 32
 
 
-def print_inspection_result(zone_name: str | None, gauge_result: dict) -> None:
+def print_inspection_result(zone_name: str | None, gauge_result: GaugeResult) -> None:
     angle = gauge_result.get("angle")
     status = gauge_result.get("status", "unknown")
-    status_cn = STATUS_CN.get(status, "未知")
+    status_cn = status_name(status)
     stable_count = gauge_result.get("stable_count", 0)
     print(f"当前区域：{zone_name or 'unknown'}")
-    print(f"仪表盘角度：{'unknown' if angle is None else str(angle) + '°'}")
+    print(f"仪表盘角度：{'unknown' if angle is None else format_angle(angle) + '°'}")
     print(f"仪表盘状态：{status} / {status_cn} ({stable_count}/{STATUS_HISTORY_SIZE})")
     if zone_name:
         print(f"巡检结果：{zone_name} 区域仪表盘{status_cn}")
@@ -211,7 +230,7 @@ def main() -> None:
     prev_time = time.time()
     last_print_time = 0.0
     use_half = True
-    last_gauge_result = {"angle": None, "status": "unknown", "success": False}
+    last_gauge_result = dict(DEFAULT_GAUGE_RESULT)
     status_history: deque[str] = deque(maxlen=STATUS_HISTORY_SIZE)
     unknown_counter = {"count": 0}
     last_zone = None
@@ -234,7 +253,7 @@ def main() -> None:
             object_count = 0
             best_zone = None
             best_zone_conf = -1.0
-            best_gauge_box = None
+            best_gauge_box: Box | None = None
             best_gauge_conf = -1.0
 
             if result.boxes is not None:
