@@ -1,0 +1,22 @@
+# Integration bridge configuration.
+# This file documents the stable topics used to connect independently developed modules.
+
+topics:
+  input_inspection_result: /bridge/inspection_result
+  input_placement_zone: /bridge/placement_zone
+  output_inspection_all: /inspection/all
+  output_placement_zone: /placement/recognized_zone
+
+logging:
+  event_log_path: output/integration_bridge/events.jsonl
+
+payload_examples:
+  inspection_single_json:
+    zone: A
+    gauge_status: high
+    abnormal: true
+  inspection_compact: A:abnormal,B:normal,C:unknown,D:unknown
+  placement_zone_text: A
+  placement_zone_json:
+    zone: zone_A
+    confidence: 0.92
