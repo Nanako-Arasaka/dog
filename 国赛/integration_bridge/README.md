@@ -5,6 +5,7 @@
 ## 职责
 
 - 接收巡检识别结果，统一成 `/inspection/all` 需要的格式。
+- 默认先冻结 A/B/C/D 四个稳定巡检结果，再发布最终 `/inspection/all`，避免机械臂提前抓取。
 - 接收放置区字母识别结果，统一成 `/placement/recognized_zone`。
 - 写入 JSONL 事件日志，便于赛前排查模块间数据是否通。
 - 在没有 ROS2 的 Windows 环境下支持 `--no-ros` 单次格式验证。
@@ -23,6 +24,7 @@
 ```text
 /inspection/all            std_msgs/String
 /placement/recognized_zone std_msgs/String
+/competition/state         std_msgs/String
 ```
 
 `/inspection/all` 示例：
@@ -48,6 +50,26 @@ python3 -m integration_bridge.bridge_node
 
 ```bash
 python3 integration_bridge/bridge_node.py
+```
+
+默认冻结巡检结果，连续 3 次稳定识别同一区域状态后冻结该区域，A/B/C/D 全部冻结后才发布 `/inspection/all`。
+
+调试时如果想恢复旧的逐帧转发：
+
+```bash
+python3 integration_bridge/bridge_node.py --no-freeze-inspection
+```
+
+调整稳定次数：
+
+```bash
+python3 integration_bridge/bridge_node.py --zone-stable-count 2
+```
+
+重置冻结结果：
+
+```bash
+ros2 topic pub --once /inspection/reset std_msgs/msg/Bool "data: true"
 ```
 
 ## 发布巡检结果

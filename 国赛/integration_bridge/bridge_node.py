@@ -23,10 +23,13 @@ if __package__ in (None, ""):
 
 from integration_bridge.bridge_core import IntegrationBridge
 from integration_bridge.event_logger import EventLogger
+from integration_bridge.inspection_freezer import InspectionFreezer
 from integration_bridge.ros_publishers import RosBridgePublishers
+from integration_bridge.schemas import inspections_from_payload
 
 
 DEFAULT_LOG_PATH = "output/integration_bridge/events.jsonl"
+COMPETITION_STATE_TOPIC = "/competition/state"
 
 
 class PrintPublisher:
@@ -43,6 +46,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-ros", action="store_true", help="Run format/log checks without ROS2.")
     parser.add_argument("--inspection-json", help="Forward one inspection JSON or compact string.")
     parser.add_argument("--placement-zone", help="Forward one placement zone payload.")
+    parser.add_argument(
+        "--no-freeze-inspection",
+        action="store_true",
+        help="Immediately forward inspection results instead of waiting for stable A/B/C/D.",
+    )
+    parser.add_argument("--zone-stable-count", type=int, default=3)
+    parser.add_argument("--frozen-publish-interval", type=float, default=1.0)
     return parser
 
 
@@ -63,7 +73,7 @@ def run_ros(args: argparse.Namespace) -> int:
     try:
         import rclpy
         from rclpy.node import Node
-        from std_msgs.msg import String
+        from std_msgs.msg import Bool, String
     except ImportError as exc:
         print(f"ROS2 Python dependencies are not available: {exc}", file=sys.stderr)
         print("Use --no-ros for local format/log validation.", file=sys.stderr)
@@ -77,20 +87,36 @@ def run_ros(args: argparse.Namespace) -> int:
                 publisher=RosBridgePublishers(self),
                 logger=logger,
             )
+            self.freeze_inspection = not args.no_freeze_inspection
+            self.freezer = InspectionFreezer(stable_count=args.zone_stable_count)
+            self.frozen_inspection_text = None
+            self.last_frozen_publish_time = 0.0
+            self.pub_state = self.create_publisher(String, COMPETITION_STATE_TOPIC, 10)
             self.create_subscription(
                 String, "/bridge/inspection_result", self._on_inspection_result, 10
             )
             self.create_subscription(
                 String, "/bridge/placement_zone", self._on_placement_zone, 10
             )
+            self.create_subscription(Bool, "/inspection/reset", self._on_inspection_reset, 10)
+            self.create_timer(max(float(args.frozen_publish_interval), 0.2), self._on_timer)
             self.get_logger().info("integration_bridge_node ready")
-            self.get_logger().info("sub: /bridge/inspection_result -> pub: /inspection/all")
+            if self.freeze_inspection:
+                self.get_logger().info(
+                    "sub: /bridge/inspection_result -> freeze A/B/C/D -> pub: /inspection/all"
+                )
+            else:
+                self.get_logger().info("sub: /bridge/inspection_result -> pub: /inspection/all")
             self.get_logger().info("sub: /bridge/placement_zone -> pub: /placement/recognized_zone")
+            self._publish_state("WAITING_INSPECTION")
 
         def _on_inspection_result(self, msg):
             try:
-                text = self.bridge.handle_inspection_payload(msg.data)
-                self.get_logger().info(f"published /inspection/all: {text}")
+                if self.freeze_inspection:
+                    self._handle_frozen_inspection(msg.data)
+                else:
+                    text = self.bridge.handle_inspection_payload(msg.data)
+                    self.get_logger().info(f"published /inspection/all: {text}")
             except Exception as exc:
                 self.get_logger().error(f"inspection bridge failed: {exc}")
 
@@ -100,6 +126,45 @@ def run_ros(args: argparse.Namespace) -> int:
                 self.get_logger().info(f"published /placement/recognized_zone: {zone}")
             except Exception as exc:
                 self.get_logger().error(f"placement bridge failed: {exc}")
+
+        def _on_inspection_reset(self, msg):
+            if not msg.data:
+                return
+            self.freezer.reset()
+            self.frozen_inspection_text = None
+            self.bridge.inspection_memory.clear()
+            self._publish_state("WAITING_INSPECTION")
+            self.get_logger().info("inspection freeze reset")
+
+        def _handle_frozen_inspection(self, payload: str):
+            for result in inspections_from_payload(payload):
+                self.bridge.logger.write(result.to_event())
+                newly_frozen = self.freezer.update(result)
+                if newly_frozen:
+                    self.get_logger().info(f"zone frozen: {result.zone}:{result.zone_state}")
+                    self.get_logger().info(f"inspection progress: {self.freezer.progress_text()}")
+                    self._publish_state(f"INSPECTION_PROGRESS:{self.freezer.progress_text()}")
+
+            if self.freezer.is_complete() and self.frozen_inspection_text is None:
+                self.frozen_inspection_text = self.freezer.frozen_text()
+                self.bridge.logger.write(
+                    {
+                        "type": "inspection_frozen",
+                        "topic": "/inspection/all",
+                        "data": self.frozen_inspection_text,
+                    }
+                )
+                self.bridge.publisher.publish_inspection_all(self.frozen_inspection_text)
+                self._publish_state(f"INSPECTION_FROZEN:{self.frozen_inspection_text}")
+                self.get_logger().info(f"published frozen /inspection/all: {self.frozen_inspection_text}")
+
+        def _on_timer(self):
+            if self.frozen_inspection_text:
+                self.bridge.publisher.publish_inspection_all(self.frozen_inspection_text)
+
+        def _publish_state(self, state: str):
+            self.pub_state.publish(String(data=state))
+            self.bridge.logger.write({"type": "competition_state", "data": state})
 
     rclpy.init()
     node: Optional[IntegrationBridgeNode] = IntegrationBridgeNode()

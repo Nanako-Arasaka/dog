@@ -99,6 +99,24 @@ source /opt/ros/humble/setup.bash
 python3 integration_bridge/bridge_node.py
 ```
 
+状态转发层默认会先冻结 A/B/C/D 四个稳定巡检结果，全部完成后才发布最终 `/inspection/all` 给机械臂。调试时如果需要逐帧转发：
+
+```bash
+python3 integration_bridge/bridge_node.py --no-freeze-inspection
+```
+
+查看当前流程状态：
+
+```bash
+ros2 topic echo /competition/state
+```
+
+重置巡检冻结结果：
+
+```bash
+ros2 topic pub --once /inspection/reset std_msgs/msg/Bool "data: true"
+```
+
 本地无 ROS2 格式验证：
 
 ```powershell
