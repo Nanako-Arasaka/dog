@@ -121,6 +121,19 @@ cd /home/jetson/yolo_deploy
 python3 live_detect_yolo_opencv.py
 ```
 
+`live_detect_yolo_opencv.py` 会在 ROS2 可用时自动发布：
+
+```text
+/bridge/inspection_result
+/bridge/placement_zone
+```
+
+如果只想保留窗口显示和终端输出，不向桥接层发布：
+
+```bash
+INSPECTION_BRIDGE_DISABLE=1 python3 live_detect_yolo_opencv.py
+```
+
 如果只做离线图片验证：
 
 ```powershell

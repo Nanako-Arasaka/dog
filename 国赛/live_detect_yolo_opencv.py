@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter, deque
+import json
 import os
 import subprocess
 import time
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import cv2
 from ultralytics import YOLO
@@ -27,6 +28,7 @@ CAMERA_FPS = 30
 DISPLAY_WIDTH = 960
 DISPLAY_HEIGHT = 540
 PRINT_INTERVAL = 1.0
+BRIDGE_PUBLISH_INTERVAL = 0.5
 STATUS_HISTORY_SIZE = 7
 STATUS_STABLE_MIN_COUNT = 4
 UNKNOWN_RESET_COUNT = 5
@@ -49,6 +51,83 @@ STATUS_CN = {
     "unknown": "未知",
 }
 DEFAULT_GAUGE_RESULT: GaugeResult = {"angle": None, "status": "unknown", "success": False}
+
+
+class BridgeInputPublisher:
+    """Optional ROS2 publisher for the integration_bridge input topics."""
+
+    def __init__(self) -> None:
+        self.enabled = False
+        self._rclpy = None
+        self._node = None
+        self._string_type = None
+        self._inspection_pub = None
+        self._placement_pub = None
+        self._owns_rclpy_context = False
+
+        if os.environ.get("INSPECTION_BRIDGE_DISABLE", "").lower() in {"1", "true", "yes"}:
+            print("[INFO] ROS2 bridge publishing disabled by INSPECTION_BRIDGE_DISABLE")
+            return
+
+        try:
+            import rclpy
+            from std_msgs.msg import String
+        except ImportError as exc:
+            print(f"[WARNING] ROS2 bridge publishing unavailable: {exc}")
+            print("[WARNING] Running display/console output only")
+            return
+
+        try:
+            if not rclpy.ok():
+                rclpy.init(args=None)
+                self._owns_rclpy_context = True
+            self._rclpy = rclpy
+            self._string_type = String
+            self._node = rclpy.create_node("inspection_live_bridge_publisher")
+            self._inspection_pub = self._node.create_publisher(String, "/bridge/inspection_result", 10)
+            self._placement_pub = self._node.create_publisher(String, "/bridge/placement_zone", 10)
+            self.enabled = True
+            print("[INFO] ROS2 bridge publishing enabled")
+            print("[INFO] pub: /bridge/inspection_result, /bridge/placement_zone")
+        except Exception as exc:
+            print(f"[WARNING] Failed to initialize ROS2 bridge publisher: {exc}")
+
+    def publish_inspection(self, zone_name: str, gauge_result: GaugeResult, zone_conf: float, gauge_conf: float) -> None:
+        if not self.enabled:
+            return
+        status = gauge_result.get("status", "unknown")
+        payload = {
+            "zone": zone_name,
+            "gauge_status": status,
+            "abnormal": status in {"low", "high"},
+            "angle": gauge_result.get("angle"),
+            "confidence": min(zone_conf, gauge_conf) if zone_conf >= 0 and gauge_conf >= 0 else None,
+            "timestamp": time.time(),
+        }
+        self._inspection_pub.publish(self._string_type(data=json.dumps(payload, ensure_ascii=False)))
+        self._spin_once()
+
+    def publish_placement_zone(self, zone_name: str, zone_conf: float) -> None:
+        if not self.enabled:
+            return
+        payload = {
+            "zone": zone_name,
+            "confidence": zone_conf if zone_conf >= 0 else None,
+            "timestamp": time.time(),
+        }
+        self._placement_pub.publish(self._string_type(data=json.dumps(payload, ensure_ascii=False)))
+        self._spin_once()
+
+    def _spin_once(self) -> None:
+        if self._rclpy is not None and self._node is not None:
+            self._rclpy.spin_once(self._node, timeout_sec=0.0)
+
+    def close(self) -> None:
+        if self._node is not None:
+            self._node.destroy_node()
+            self._node = None
+        if self._rclpy is not None and self._owns_rclpy_context and self._rclpy.ok():
+            self._rclpy.shutdown()
 
 
 def status_name(status: str) -> str:
@@ -209,6 +288,11 @@ def print_inspection_result(zone_name: str | None, gauge_result: GaugeResult) ->
         print(f"巡检结果：{zone_name} 区域仪表盘{status_cn}")
 
 
+def should_publish_inspection(zone_name: Optional[str], gauge_result: GaugeResult) -> bool:
+    status = gauge_result.get("status", "unknown")
+    return bool(zone_name) and status in {"low", "normal", "high"} and bool(gauge_result.get("success"))
+
+
 def main() -> None:
     if not check_environment():
         return
@@ -234,6 +318,11 @@ def main() -> None:
     status_history: deque[str] = deque(maxlen=STATUS_HISTORY_SIZE)
     unknown_counter = {"count": 0}
     last_zone = None
+    last_zone_conf = -1.0
+    last_gauge_conf = -1.0
+    last_inspection_publish_time = 0.0
+    last_placement_publish_time = 0.0
+    bridge_publisher = BridgeInputPublisher()
 
     try:
         while True:
@@ -281,8 +370,10 @@ def main() -> None:
 
             if best_zone is not None:
                 last_zone = best_zone
+                last_zone_conf = best_zone_conf
 
             if best_gauge_box is not None:
+                last_gauge_conf = best_gauge_conf
                 x1, y1, x2, y2 = best_gauge_box
                 gauge_roi = frame[y1:y2, x1:x2]
                 raw_gauge_result = read_gauge(gauge_roi)
@@ -294,6 +385,22 @@ def main() -> None:
                 print_inspection_result(last_zone, last_gauge_result)
                 last_print_time = now
 
+            if best_zone is not None and now - last_placement_publish_time >= BRIDGE_PUBLISH_INTERVAL:
+                bridge_publisher.publish_placement_zone(best_zone, best_zone_conf)
+                last_placement_publish_time = now
+
+            if (
+                should_publish_inspection(last_zone, last_gauge_result)
+                and now - last_inspection_publish_time >= BRIDGE_PUBLISH_INTERVAL
+            ):
+                bridge_publisher.publish_inspection(
+                    last_zone,
+                    last_gauge_result,
+                    last_zone_conf,
+                    last_gauge_conf,
+                )
+                last_inspection_publish_time = now
+
             draw_overlay(frame, fps, object_count, last_zone, last_gauge_result)
             display_frame = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
             cv2.imshow(WINDOW_NAME, display_frame)
@@ -301,6 +408,7 @@ def main() -> None:
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
+        bridge_publisher.close()
         cap.release()
         cv2.destroyAllWindows()
 

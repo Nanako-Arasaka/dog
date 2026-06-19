@@ -52,6 +52,8 @@ python3 integration_bridge/bridge_node.py
 
 ## 发布巡检结果
 
+实时巡检程序 `live_detect_yolo_opencv.py` 在 ROS2 可用时会自动发布到本桥接层输入 topic。以下命令主要用于手动联调。
+
 单个区域 JSON：
 
 ```bash
