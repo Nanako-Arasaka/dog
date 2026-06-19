@@ -12,6 +12,7 @@
 ├── gauge_reader.py                  # 仪表盘 ROI 指针角度读取
 ├── integration_bridge/              # 状态转发层：格式统一、ROS2 topic 转发、日志
 ├── arm_grasp/                       # 机械臂红条抓取、保持夹紧、目标区放置
+├── obstacle_avoidance/              # 锥形桶 YOLO 检测 + 规则避障 + UDP 速度输出
 ├── controller/                      # Lite2 移动接收、ORB-SLAM3、目标点控制
 ├── tools/                           # 数据集整理、标签检查、YOLO 推理和闭环 demo
 ├── docs/                            # 真实照片标注和训练流程文档
@@ -138,6 +139,32 @@ python .\integration_bridge\bridge_node.py --no-ros --placement-zone "zone_A"
 cd /home/jetson/yolo_deploy
 python3 live_detect_yolo_opencv.py
 ```
+
+### 障碍区域：锥形桶避障
+
+该模块只在障碍区域内启用。YOLO 只负责检测 `cone` 框，`obstacle_avoidance/cone_strategy.py` 根据框的位置和面积输出 `vx/vy/wz`，再通过 UDP 发给 `controller/lite2_motion_receiver.py`。
+
+干跑调试：
+
+```bash
+cd /home/jetson/yolo_deploy
+python3 -m obstacle_avoidance.obstacle_zone_runner \
+  --model /home/jetson/yolo_deploy/cone_best.pt \
+  --camera /dev/video0 \
+  --dry-run
+```
+
+正式接入狗端：
+
+```bash
+python3 -m obstacle_avoidance.obstacle_zone_runner \
+  --model /home/jetson/yolo_deploy/cone_best.pt \
+  --camera /dev/video0 \
+  --udp-host 127.0.0.1 \
+  --udp-port 5005
+```
+
+详细拍摄、标注和参数说明见 `obstacle_avoidance/README.md`。
 
 `live_detect_yolo_opencv.py` 会在 ROS2 可用时自动发布：
 

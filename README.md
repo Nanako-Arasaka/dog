@@ -104,7 +104,7 @@ python3 start_dog.py \
 2. **状态转发层** — `国赛/integration_bridge/` 只负责格式统一、ROS2 topic 转发和事件日志，例如 `/bridge/inspection_result -> /inspection/all`、`/bridge/placement_zone -> /placement/recognized_zone`。
 3. **机械臂抓取** — `国赛/arm_grasp/` 负责红色长条抓取、保持夹紧，并在识别到目标放置区后执行放置。
 4. **狗端运动与建图** — `国赛/controller/` 负责 Lite2 运动指令接收、ORB-SLAM3 相关代码和目标点控制。
-5. **避障功能** — 锥形桶检测和绕行策略建议运行在 Jetson 上，只向狗端下发轻量速度指令。
+5. **避障功能** — `国赛/obstacle_avoidance/` 使用 YOLO 检测锥形桶，再用规则层根据 bbox 位置和面积输出 `vx/vy/wz`，只向狗端下发轻量速度指令。
 
 ### 国赛主流程
 
@@ -150,6 +150,16 @@ ros2 launch arm_grasp jetarm_grasp.launch.py
 ```bash
 cd /home/jetson/controller
 python3 lite2_motion_receiver.py --listen-port 5005 --dry-run
+```
+
+锥形桶避障模型训练完成后建议部署为 `/home/jetson/yolo_deploy/cone_best.pt`。先用 dry-run 验证检测和速度策略：
+
+```bash
+cd /home/jetson/yolo_deploy
+python3 -m obstacle_avoidance.obstacle_zone_runner \
+  --model /home/jetson/yolo_deploy/cone_best.pt \
+  --camera /dev/video0 \
+  --dry-run
 ```
 
 详见 [国赛/README.md](国赛/README.md)
