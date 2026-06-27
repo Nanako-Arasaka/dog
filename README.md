@@ -15,86 +15,128 @@
 
 ---
 
-## 一、预选赛 — 仪表盘识别系统
+## 一、预选赛 — 机器狗仪表盘识别系统
 
-### 架构
+预选赛部分已经完成，用于 2026 年中国高校智能机器人创意大赛（四足大型组）预选赛阶段的仪表盘状态识别。该版本为最终实际成果版本，整体采用本地摄像头采集、本地模型推理和本地 OpenCV 可视化的方式运行，不再使用狗端与 Jetson 之间的 UDP 视频帧转发架构。
 
+### 系统架构
+
+```text
+摄像头
+  → OpenCV 读取画面
+  → 霍夫圆检测定位仪表盘区域
+  → 裁剪仪表盘 ROI
+  → ResNet18 三分类模型推理
+  → 输出 down / normal / over
+  → OpenCV 窗口实时显示 FPS、检测圆框和识别结果
 ```
-摄像头(狗端) → UDP JPEG帧 → Jetson推理(TensorRT) → UDP JSON结果 → 狗端可视化
+
+系统支持两种推理后端：
+
+1. **PyTorch 推理**：用于常规调试、模型验证和开发阶段运行。
+2. **TensorRT 推理**：用于 Jetson 上的最终部署加速，输入尺寸为 `224 × 224`。
+
+### 识别类别
+
+| 模型输出 | 中文含义 | 说明 |
+|:--:|:--:|------|
+| `down` | 偏低 | 仪表盘读数偏低 |
+| `normal` | 正常 | 仪表盘读数处于正常范围 |
+| `over` | 偏高 | 仪表盘读数偏高 |
+
+标签顺序固定为：
+
+```text
+down → normal → over
 ```
 
-- **狗端** (`start_dog.py`)：采集摄像头画面 → UDP 发送 JPEG 帧 → 接收推理结果 → OpenCV 渲染
-- **Jetson 端** (`start_jetson.py`)：接收视频帧 → HoughCircleCropper 裁剪仪表盘 → TensorRT 推理 → 回传 JSON
-- 支持独立本地模式：直接连摄像头推理，无需网络（见 `start_dog.py` 内 `standalone` 模式）
+训练集目录和推理端类别顺序需要保持一致，建议训练数据文件夹命名为：
+
+```text
+down/
+normal/
+over/
+```
 
 ### 目录结构
 
-```
-yuxuansai_new/
-├── start_dog.py              # 狗端入口：采集 + 推流 + 结果可视化
-├── start_jetson.py           # Jetson 端入口：收帧 → 推理 → 回传
-├── start_dog.sh / start_jetson.sh   # Linux 一键启动脚本
-├── perception/               # 感知核心
-│   ├── cropper.py            # HoughCircleCropper 霍夫圆检测 + 裁剪
-│   ├── detector.py           # DashboardCameraDetector 推理 + 分类
-│   ├── model.py              # ResNet18 / ResNet34 分类模型
-│   ├── inference.py          # TensorRT 推理封装
-│   └── visualize.py          # PIL 中文渲染 / SwitchConfirm 防抖
-├── scripts/
-│   ├── build_trt.py          # 构建 TensorRT 引擎
-│   ├── export_onnx.py        # 导出 ONNX 模型
-│   └── video_extractor.py    # 视频抽帧工具
-├── checkpoints/              # 模型权重 / TensorRT 引擎（需自行放置）
-├── data/                     # 训练/测试数据（需自行放置）
-└── requirements.txt
+```text
+yuxuansai/
+├── start_dog.py              # 本地推理统一入口，支持 PyTorch / TensorRT
+├── start_jetson.py           # 兼容入口，实际调用 start_dog.py
+├── Dashboard_detec2t.py      # PyTorch 推理脚本，ResNet18 三分类
+├── detect_dashboard_trt.py   # TensorRT 推理脚本，最终部署版本
+├── dashboard_model.py        # ResNet18 / ResNet34 模型定义
+├── dashboard_train.py        # 仪表盘分类模型训练脚本
+├── trans_onnx.py             # PyTorch 权重导出 ONNX
+├── trans_trt.py              # ONNX 转 TensorRT 引擎
+├── round_detect.py           # 仪表盘圆形检测相关实验脚本
+├── Opencv_Dashboard_detect.py # OpenCV 仪表盘检测实验脚本
+├── checkpoints/              # 模型权重与 TensorRT 引擎目录
+└── resnet18_dashboard.trt    # TensorRT 引擎文件示例
 ```
 
 ### 快速启动
 
-**Jetson 端：**
+#### PyTorch 模式
+
+默认使用 PyTorch 后端进行本地推理：
 
 ```bash
-python3 start_jetson.py \
-  --target-ip <狗端IP> --target-port 5005 \
-  --engine-path ./checkpoints/model_fp16_160.engine \
-  --input-size 160
+python3 start_dog.py
 ```
 
-**狗端：**
+也可以显式指定模型权重：
 
 ```bash
 python3 start_dog.py \
-  --jetson-ip <Jetson IP> --jetson-frame-port 6006 \
-  --listen-port 5005
+  --mode torch \
+  --model-path ./checkpoints/model_best.pth
+```
+
+#### TensorRT 模式
+
+在 Jetson 或支持 TensorRT 的环境中，可以使用 TensorRT 引擎运行：
+
+```bash
+python3 start_dog.py \
+  --mode trt \
+  --engine-path ./checkpoints/resnet18_dashboard.trt
 ```
 
 ### 关键参数
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--confidence-threshold` | 0.5 | 单帧置信度阈值 |
-| `--hough-interval` | 3 | 圆检测间隔帧数 |
-| `--cls-confirm-window` | 2 | 分类确认窗口（连续 N 帧一致才切换） |
-| `--input-size` | 160 | 推理输入尺寸（需与训练/ONNX 一致） |
-| `--send-hz` | 15 | UDP 发送频率 |
+| `--mode` | `torch` | 推理后端，可选 `torch` 或 `trt` |
+| `--model-path` | `./checkpoints/model_best.pth` | PyTorch 权重路径 |
+| `--engine-path` | `./checkpoints/resnet18_dashboard.trt` | TensorRT 引擎路径 |
+| `--camera-device` | PyTorch 为空，TensorRT 为 `/dev/video2` | 摄像头设备路径 |
+| `--camera-index` | PyTorch 为 `3`，TensorRT 为 `2` | 摄像头索引备用参数 |
+| `--width` | `640` | 摄像头画面宽度 |
+| `--height` | `480` | 摄像头画面高度 |
+| `--no-infer-flip` | 关闭 | PyTorch 模式下不对推理输入做上下翻转 |
 
-### 结果显示
+### 推理流程说明
 
-| 类别 | 颜色 | 含义 |
-|:----:|:----:|------|
-| High | 红色 | 仪表读数偏高 |
-| Normal | 绿色 | 正常 |
-| Low | 黄色 | 仪表读数偏低 |
-| Unknown | 灰色 | 未检测到 / 置信度不足 |
+1. 使用 OpenCV 从摄像头读取实时画面。
+2. 对画面进行灰度化和高斯模糊处理。
+3. 使用霍夫圆检测寻找仪表盘圆形区域。
+4. 选择半径最大的圆作为仪表盘主体。
+5. 裁剪仪表盘 ROI，并放大后送入模型。
+6. 将 ROI resize 到 `224 × 224`。
+7. 使用 ResNet18 进行三分类推理。
+8. 使用滑动结果缓冲区稳定输出，减少单帧误判。
+9. 在 OpenCV 窗口中显示 FPS、识别结果和圆形定位框。
 
 ### 注意事项
 
-- **训练 `--input-size` / 导出 ONNX / Jetson 启动 `--input-size` 三者必须一致**
-- **训练 `class_order` 与推理 `--class-names` 必须一致（high, normal, low）**
-- 先 FP32 保精度，再切 FP16 做性能优化
-- 调参顺序：先 `--hough-canny-high` 确保圆检测正确 → 再调 `--confidence-threshold` 控制误分类 → 最后调 `--stabilizer-window` 控制输出抖动
-
----
+- 当前最终成果不是“狗端采集画面、Jetson 远程推理、UDP 回传结果”的网络架构，而是本地直接推理架构。
+- `start_jetson.py` 只是为了兼容旧文件名保留，实际入口仍然复用 `start_dog.py`。
+- TensorRT 推理输入尺寸固定为 `224 × 224`，训练、ONNX 导出和 TensorRT 转换时需要保持一致。
+- 类别顺序必须固定为 `down, normal, over`，否则会导致中文结果含义错位。
+- 摄像头索引在不同设备上可能不同，如果无法打开摄像头，需要调整 `--camera-device` 或 `--camera-index`。
+- PyTorch 模式下默认会对推理输入做上下翻转，如果现场画面方向已经正确，可以使用 `--no-infer-flip` 关闭。
 
 ## 二、国赛 — Jetson 主计算联调方案
 
