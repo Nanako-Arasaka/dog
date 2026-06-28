@@ -33,11 +33,34 @@ def test_parse_single_inspection_json_to_abnormal():
     results = inspections_from_payload(
         json.dumps({"zone": "zone_A", "gauge_status": "high", "abnormal": True})
     )
+    assert results[0].gauge_status == "high"
     assert format_inspection_all(results) == "A:abnormal,B:unknown,C:unknown,D:unknown"
+
+
+def test_abnormal_does_not_overwrite_low_or_high_gauge_status():
+    low_result = inspection_from_mapping({"zone": "A", "gauge_status": "low", "abnormal": True})
+    high_result = inspection_from_mapping({"zone": "C", "gauge_status": "high", "abnormal": True})
+    normal_result = inspection_from_mapping({"zone": "B", "gauge_status": "normal", "abnormal": False})
+
+    assert low_result.gauge_status == "low"
+    assert low_result.zone_state == "abnormal"
+    assert high_result.gauge_status == "high"
+    assert high_result.zone_state == "abnormal"
+    assert normal_result.gauge_status == "normal"
+    assert normal_result.zone_state == "normal"
+
+
+def test_abnormal_without_gauge_status_keeps_status_unknown():
+    result = inspection_from_mapping({"zone": "A", "abnormal": True})
+
+    assert result.gauge_status == "unknown"
+    assert result.zone_state == "abnormal"
 
 
 def test_parse_compact_inspection_text():
     results = inspections_from_payload("A:abnormal,B:normal,C:unknown,D:normal")
+    assert results[0].gauge_status == "unknown"
+    assert results[0].zone_state == "abnormal"
     assert format_inspection_all(results) == "A:abnormal,B:normal,C:unknown,D:normal"
 
 

@@ -88,8 +88,6 @@ def normalize_zone(value: Any) -> Optional[str]:
 
 
 def normalize_gauge_status(value: Any, abnormal: Optional[bool] = None) -> str:
-    if abnormal is True:
-        return "high"
     if abnormal is False and value in (None, ""):
         return "normal"
     text = str(value or "unknown").strip().lower()
@@ -176,7 +174,7 @@ def inspections_from_compact(text: str) -> List[InspectionResult]:
         state = state_text.strip().lower()
         if state in ("normal", "abnormal", "unknown"):
             abnormal = True if state == "abnormal" else False if state == "normal" else None
-            gauge_status = "unknown" if state == "unknown" else "high" if abnormal else "normal"
+            gauge_status = "normal" if state == "normal" else "unknown"
         else:
             gauge_status = normalize_gauge_status(state)
             abnormal = None
