@@ -1,0 +1,22 @@
+normal_speed: 0.15
+slow_speed: 0.08
+max_turn_speed: 0.25
+safe_radius: 0.55
+slow_distance: 1.20
+stop_distance: 0.55
+front_emergency_width: 0.45
+front_emergency_distance: 0.50
+perception_timeout: 0.50
+recover_stop_seconds: 0.40
+send_rate_hz: 10.0
+min_confidence: 0.45
+max_z: 3.0
+gap_pass_width: 1.10
+# main_avoidance_run.py sends UDP JSON to lite2_motion_receiver.py.
+# Keep 127.0.0.1 when both programs run on the Jetson.
+# This is not the robot motion host IP. The robot IP is passed to
+# lite2_motion_receiver.py with --robot-ip over the Jetson wired Ethernet.
+receiver_ip: 127.0.0.1
+receiver_port: 5005
+min_depth_valid_ratio: 0.35
+min_realsense_fps: 8.0
