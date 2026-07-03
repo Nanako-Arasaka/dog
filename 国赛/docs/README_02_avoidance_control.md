@@ -369,7 +369,8 @@ python3 cone_avoidance/scripts/realsense_aligned_depth_web.py \
   --control-rate-hz 10 | \
 python3 -m cone_avoidance.main_avoidance_run \
   --receiver-ip 127.0.0.1 \
-  --receiver-port 5005
+  --receiver-port 5005 \
+  --motion-status-url http://127.0.0.1:8080/motion.json
 ```
 
 浏览器查看感知画面：
@@ -379,6 +380,7 @@ http://<jetson-ip>:8080/
 ```
 
 这里的 `--receiver-ip 127.0.0.1` 只是 Jetson 本机 `lite2_motion_receiver.py`，不是机器狗 IP。机器狗运动主机 IP 只写在终端 1 的 `--robot-ip`。
+`--motion-status-url` 用于把控制模块最终输出的 `reason/vx/vy/wz/state` 回传到浏览器页面，方便确认机器狗将要执行的动作。
 
 ## 常见坑
 

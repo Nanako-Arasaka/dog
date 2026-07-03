@@ -7,6 +7,8 @@ from pathlib import Path
 import sys
 import time
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from .avoidance_state_machine import AvoidanceStateMachine
 from .motion_sender import MotionSender
@@ -64,7 +66,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=None, help="Path to control.yaml; defaults to cone_avoidance/config/control.yaml.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without sending UDP.")
     parser.add_argument("--send-stop-on-exit", action="store_true", help="Send a final stop command on shutdown.")
+    parser.add_argument("--motion-status-url", default=None, help="Optional HTTP endpoint for browser visualization, e.g. http://127.0.0.1:8080/motion.json.")
     return parser.parse_args()
+
+
+def post_motion_status(url: str | None, command: VelocityCommand, input_payload: dict[str, Any]) -> None:
+    if not url:
+        return
+    payload = command.to_payload()
+    payload["timestamp"] = time.time()
+    payload["input_status"] = input_payload.get("status")
+    payload["input_frame"] = input_payload.get("frame")
+    payload["obstacle_count"] = len(input_payload.get("obstacles") or [])
+    payload["front_depth"] = input_payload.get("front_depth", input_payload.get("front_min_depth"))
+    payload["depth_valid_ratio"] = input_payload.get("depth_valid_ratio")
+    payload["realsense_fps"] = input_payload.get("realsense_fps", input_payload.get("camera_fps"))
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    request = Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urlopen(request, timeout=0.05):
+            pass
+    except (OSError, URLError, TimeoutError):
+        return
 
 
 def main() -> None:
@@ -95,6 +118,7 @@ def main() -> None:
                 realsense_ok=payload.get("realsense_ok", payload.get("camera_ok")),
             )
             print(command.log_line(), flush=True)
+            post_motion_status(args.motion_status_url, command, payload)
             if sender is not None:
                 sender.send(command)
     finally:

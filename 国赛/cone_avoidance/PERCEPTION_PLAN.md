@@ -291,7 +291,8 @@ python3 cone_avoidance/scripts/realsense_aligned_depth_web.py \
   --control-rate-hz 10 | \
 python3 -m cone_avoidance.main_avoidance_run \
   --receiver-ip 127.0.0.1 \
-  --receiver-port 5005
+  --receiver-port 5005 \
+  --motion-status-url http://127.0.0.1:8080/motion.json
 ```
 
 `--control-jsonl` 会让 stdout 只输出控制模块需要的字段：
@@ -302,6 +303,7 @@ python3 -m cone_avoidance.main_avoidance_run \
 - `aligned_depth_ok`: aligned depth 是否可用
 - `realsense_ok`: RealSense 是否正常
 - `realsense_fps`: RealSense 实测帧率
+- `--motion-status-url`: 把控制模块最终输出的 `reason/vx/vy/wz/state` 回传到浏览器页面
 
 浏览器预览仍然可用：
 

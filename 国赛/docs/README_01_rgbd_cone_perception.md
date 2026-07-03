@@ -440,10 +440,11 @@ python3 cone_avoidance/scripts/realsense_aligned_depth_web.py \
   --control-rate-hz 10 | \
 python3 -m cone_avoidance.main_avoidance_run \
   --receiver-ip 127.0.0.1 \
-  --receiver-port 5005
+  --receiver-port 5005 \
+  --motion-status-url http://127.0.0.1:8080/motion.json
 ```
 
-`--control-jsonl` 会让 stdout 只输出控制侧需要的 JSON 行，浏览器预览仍然可用：
+`--control-jsonl` 会让 stdout 只输出控制侧需要的 JSON 行，浏览器预览仍然可用。`--motion-status-url` 会把控制模块最终输出的 `reason/vx/vy/wz/state` 回传到同一个网页：
 
 ```text
 http://<jetson-ip>:8080/

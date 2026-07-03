@@ -52,6 +52,7 @@ class SharedFrames:
         self.overlay_jpg: bytes | None = None
         self.depth_jpg: bytes | None = None
         self.stats: dict[str, Any] = {"status": "starting"}
+        self.motion: dict[str, Any] = {"status": "waiting_for_control"}
 
     def update(self, overlay: np.ndarray, depth_vis: np.ndarray, stats: dict[str, Any], quality: int) -> None:
         params = [int(cv2.IMWRITE_JPEG_QUALITY), int(max(1, min(100, quality)))]
@@ -75,6 +76,14 @@ class SharedFrames:
     def get_stats(self) -> dict[str, Any]:
         with self.lock:
             return dict(self.stats)
+
+    def update_motion(self, payload: dict[str, Any]) -> None:
+        with self.lock:
+            self.motion = dict(payload)
+
+    def get_motion(self) -> dict[str, Any]:
+        with self.lock:
+            return dict(self.motion)
 
 
 def center_depth_stats(depth_m: np.ndarray, roi_size: int) -> dict[str, Any]:
@@ -442,18 +451,64 @@ def make_handler(shared: SharedFrames):
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
+        def _send_json(self, payload_obj: dict[str, Any]) -> None:
+            payload = json.dumps(payload_obj, ensure_ascii=False, indent=2).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
         def do_GET(self) -> None:
             if self.path in ("/", "/index.html"):
                 payload = b"""<!doctype html>
 <html><head><meta charset="utf-8"><title>YOLO Cone + RealSense Aligned Depth</title>
-<style>body{font-family:sans-serif;background:#111;color:#eee;margin:20px}img{max-width:48%;border:1px solid #444;margin-right:1%;vertical-align:top}pre{background:#222;padding:12px;white-space:pre-wrap}</style>
+<style>
+body{font-family:sans-serif;background:#111;color:#eee;margin:20px}
+img{max-width:48%;border:1px solid #444;margin-right:1%;vertical-align:top}
+pre{background:#222;padding:12px;white-space:pre-wrap}
+.motion{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}
+.box{background:#1e1e1e;border:1px solid #444;padding:12px}
+.label{color:#aaa;font-size:13px}
+.value{font-size:28px;font-weight:700;margin-top:4px}
+.stop{color:#ff6666}.go{color:#66ff99}.turn{color:#ffd966}
+</style>
 </head><body>
 <h2>YOLO Cone + RealSense Aligned Depth</h2>
 <p>This uses YOLO bbox + pyrealsense2 rs.align(rs.stream.color) to output cone x/z.</p>
 <img src="/overlay.mjpg"><img src="/depth.mjpg">
+<h3>Motion Command</h3>
+<div class="motion">
+  <div class="box"><div class="label">state</div><div id="motion-state" class="value">waiting</div></div>
+  <div class="box"><div class="label">reason</div><div id="motion-reason" class="value">waiting</div></div>
+  <div class="box"><div class="label">vx</div><div id="motion-vx" class="value">0.00</div></div>
+  <div class="box"><div class="label">wz</div><div id="motion-wz" class="value">0.00</div></div>
+</div>
+<pre id="motion-json">waiting...</pre>
 <h3>Status</h3><pre id="stats">loading...</pre>
 <script>
-async function tick(){const r=await fetch('/stats.json');document.getElementById('stats').textContent=JSON.stringify(await r.json(), null, 2);}
+function fmt(v){return (typeof v === 'number') ? v.toFixed(3) : String(v ?? 'null');}
+function setMotion(m){
+  const state = m.state ?? m.status ?? 'waiting';
+  const reason = m.reason ?? 'waiting';
+  const vx = Number(m.vx ?? 0);
+  const wz = Number(m.wz ?? 0);
+  document.getElementById('motion-state').textContent = state;
+  document.getElementById('motion-reason').textContent = reason;
+  document.getElementById('motion-vx').textContent = fmt(vx);
+  document.getElementById('motion-wz').textContent = fmt(wz);
+  document.getElementById('motion-json').textContent = JSON.stringify(m, null, 2);
+  const cls = (Math.abs(vx) < 0.001 && Math.abs(wz) < 0.001) ? 'stop' : (Math.abs(wz) > 0.001 ? 'turn' : 'go');
+  for (const id of ['motion-state','motion-reason','motion-vx','motion-wz']) {
+    document.getElementById(id).className = 'value ' + cls;
+  }
+}
+async function tick(){
+  const r=await fetch('/stats.json');
+  document.getElementById('stats').textContent=JSON.stringify(await r.json(), null, 2);
+  const m=await fetch('/motion.json');
+  setMotion(await m.json());
+}
 setInterval(tick,1000);tick();
 </script></body></html>"""
                 self.send_response(HTTPStatus.OK)
@@ -464,12 +519,11 @@ setInterval(tick,1000);tick();
                 return
 
             if self.path == "/stats.json":
-                payload = json.dumps(shared.get_stats(), ensure_ascii=False, indent=2).encode("utf-8")
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
+                self._send_json(shared.get_stats())
+                return
+
+            if self.path == "/motion.json":
+                self._send_json(shared.get_motion())
                 return
 
             name = None
@@ -499,6 +553,22 @@ setInterval(tick,1000);tick();
                     time.sleep(0.05)
             except (BrokenPipeError, ConnectionResetError):
                 return
+
+        def do_POST(self) -> None:
+            if self.path != "/motion.json":
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("motion payload must be a JSON object")
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            shared.update_motion(payload)
+            self._send_json({"status": "ok"})
 
     return Handler
 

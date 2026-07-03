@@ -69,6 +69,7 @@ python3 cone_avoidance/scripts/realsense_aligned_depth_web.py \
 python3 -m cone_avoidance.main_avoidance_run \
   --receiver-ip 127.0.0.1 \
   --receiver-port 5005 \
+  --motion-status-url http://127.0.0.1:8080/motion.json \
   --dry-run
 ```
 
@@ -115,7 +116,8 @@ python3 cone_avoidance/scripts/realsense_aligned_depth_web.py \
   --control-rate-hz 10 | \
 python3 -m cone_avoidance.main_avoidance_run \
   --receiver-ip 127.0.0.1 \
-  --receiver-port 5005
+  --receiver-port 5005 \
+  --motion-status-url http://127.0.0.1:8080/motion.json
 ```
 
 实机前必须确认：
