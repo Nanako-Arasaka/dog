@@ -1,0 +1,13 @@
+path: E:/DOG/Thedog/国赛/data/inspection_yolo
+train: images/train
+val: images/val
+test: images/test
+nc: 7
+names:
+  0: zone_A
+  1: zone_B
+  2: zone_C
+  3: zone_D
+  4: gauge_low
+  5: gauge_normal
+  6: gauge_high

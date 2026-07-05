@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -40,10 +42,121 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-valid-ratio", type=float, default=0.08, help="Minimum valid depth ratio inside bbox ROI.")
     parser.add_argument("--control-jsonl", action="store_true", help="Print compact control JSONL to stdout for main_avoidance_run.py.")
     parser.add_argument("--control-rate-hz", type=float, default=10.0, help="Maximum control JSONL output rate. <=0 prints every frame.")
+    parser.add_argument("--pose-timeout", type=float, default=1.0, help="Maximum pose age in seconds before omitting pose from JSONL.")
+    parser.add_argument("--pose-topic", default="/camera_pose", help="Primary PoseStamped topic.")
+    parser.add_argument("--fallback-pose-topic", default="/orbslam3/pose", help="Fallback PoseStamped topic.")
+    parser.add_argument("--odom-topic", default="/odom", help="Fallback Odometry topic.")
+    parser.add_argument("--no-pose", action="store_true", help="Do not start the optional ROS2 pose listener.")
     parser.add_argument("--jpeg-quality", type=int, default=80, help="JPEG quality.")
     parser.add_argument("--save-dir", type=Path, default=Path("debug/realsense_aligned_depth_web"), help="Snapshot output directory.")
     parser.add_argument("--save-every", type=int, default=0, help="Save one debug frame every N processed pairs. 0 disables saving.")
     return parser.parse_args()
+
+
+@dataclass
+class LatestPose:
+    x: float
+    y: float
+    yaw: float
+    stamp: float
+    source: str
+
+    def to_payload(self) -> dict[str, float | str]:
+        return {
+            "x": round(float(self.x), 4),
+            "y": round(float(self.y), 4),
+            "yaw": round(float(self.yaw), 4),
+            "source": self.source,
+        }
+
+
+class PoseListener:
+    """Optional ROS2 listener for PoseStamped/Odometry without making vision depend on ROS."""
+
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        self.lock = threading.Lock()
+        self.latest_pose: LatestPose | None = None
+        self.available = False
+        self._node: Any | None = None
+        self._rclpy: Any | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self.args.no_pose:
+            return
+        try:
+            import rclpy
+            from geometry_msgs.msg import PoseStamped
+            from nav_msgs.msg import Odometry
+            from rclpy.node import Node
+        except ImportError as exc:
+            print(f"[pose] ROS2 pose listener disabled: {exc}", file=sys.stderr)
+            return
+
+        listener = self
+
+        class _PoseNode(Node):
+            def __init__(self) -> None:
+                super().__init__("cone_control_pose_listener")
+                self.create_subscription(PoseStamped, listener.args.pose_topic, self._on_camera_pose, 10)
+                if listener.args.fallback_pose_topic != listener.args.pose_topic:
+                    self.create_subscription(PoseStamped, listener.args.fallback_pose_topic, self._on_orb_pose, 10)
+                self.create_subscription(Odometry, listener.args.odom_topic, self._on_odom, 10)
+                self.get_logger().info(
+                    "Pose listener: "
+                    f"{listener.args.pose_topic}, {listener.args.fallback_pose_topic}, {listener.args.odom_topic}"
+                )
+
+            def _on_camera_pose(self, msg: Any) -> None:
+                listener._update_pose(msg.pose, listener.args.pose_topic)
+
+            def _on_orb_pose(self, msg: Any) -> None:
+                listener._update_pose(msg.pose, listener.args.fallback_pose_topic)
+
+            def _on_odom(self, msg: Any) -> None:
+                listener._update_pose(msg.pose.pose, listener.args.odom_topic)
+
+        try:
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self._rclpy = rclpy
+            self._node = _PoseNode()
+            self.available = True
+            self._thread = threading.Thread(target=rclpy.spin, args=(self._node,), daemon=True)
+            self._thread.start()
+        except Exception as exc:
+            print(f"[pose] failed to start ROS2 pose listener: {exc}", file=sys.stderr)
+            self.available = False
+
+    def stop(self) -> None:
+        if self._node is not None:
+            self._node.destroy_node()
+        if self._rclpy is not None and self._rclpy.ok():
+            self._rclpy.shutdown()
+
+    def _update_pose(self, pose: Any, source: str) -> None:
+        q = pose.orientation
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        latest = LatestPose(
+            x=float(pose.position.x),
+            y=float(pose.position.y),
+            yaw=float(math.atan2(siny_cosp, cosy_cosp)),
+            stamp=time.monotonic(),
+            source=source,
+        )
+        with self.lock:
+            self.latest_pose = latest
+
+    def get_pose_payload(self) -> dict[str, float | str] | None:
+        with self.lock:
+            pose = self.latest_pose
+        if pose is None:
+            return None
+        if time.monotonic() - pose.stamp > max(0.0, float(self.args.pose_timeout)):
+            return None
+        return pose.to_payload()
 
 
 class SharedFrames:
@@ -138,7 +251,7 @@ def camera_fps(frame_times: deque[float]) -> float | None:
     return round(float((len(frame_times) - 1) / elapsed), 2)
 
 
-def make_control_payload(stats: dict[str, Any], fps: float | None) -> dict[str, Any]:
+def make_control_payload(stats: dict[str, Any], fps: float | None, pose: dict[str, Any] | None = None) -> dict[str, Any]:
     center_roi = stats.get("center_roi") if isinstance(stats.get("center_roi"), dict) else {}
     front_depth = center_roi.get("min_m")
     if front_depth is None:
@@ -173,6 +286,8 @@ def make_control_payload(stats: dict[str, Any], fps: float | None) -> dict[str, 
     }
     if fps is not None:
         payload["realsense_fps"] = fps
+    if pose is not None:
+        payload["pose"] = pose
     return payload
 
 
@@ -297,24 +412,24 @@ def draw_overlay(
     return overlay
 
 
-def realsense_loop(args: argparse.Namespace, shared: SharedFrames) -> None:
+def realsense_loop(args: argparse.Namespace, shared: SharedFrames, pose_listener: PoseListener | None = None) -> None:
     try:
         import pyrealsense2 as rs
     except ImportError as exc:
         shared.stats = {"status": "missing_pyrealsense2", "error": str(exc), "aligned": False}
-        emit_control_payload(args, make_control_payload(shared.stats, None))
+        emit_control_payload(args, make_control_payload(shared.stats, None, pose_listener.get_pose_payload() if pose_listener else None))
         return
     try:
         from ultralytics import YOLO
     except ImportError as exc:
         shared.stats = {"status": "missing_ultralytics", "error": str(exc), "hint": "pip install ultralytics", "aligned": False}
-        emit_control_payload(args, make_control_payload(shared.stats, None))
+        emit_control_payload(args, make_control_payload(shared.stats, None, pose_listener.get_pose_payload() if pose_listener else None))
         return
 
     model_path = args.model.resolve()
     if not model_path.exists():
         shared.stats = {"status": "missing_model", "model": str(model_path), "aligned": False}
-        emit_control_payload(args, make_control_payload(shared.stats, None))
+        emit_control_payload(args, make_control_payload(shared.stats, None, pose_listener.get_pose_payload() if pose_listener else None))
         return
 
     args.save_dir.mkdir(parents=True, exist_ok=True)
@@ -322,7 +437,7 @@ def realsense_loop(args: argparse.Namespace, shared: SharedFrames) -> None:
         model = YOLO(str(model_path))
     except Exception as exc:
         shared.stats = {"status": "model_load_failed", "model": str(model_path), "error": str(exc), "aligned": False}
-        emit_control_payload(args, make_control_payload(shared.stats, None))
+        emit_control_payload(args, make_control_payload(shared.stats, None, pose_listener.get_pose_payload() if pose_listener else None))
         return
 
     pipeline = rs.pipeline()
@@ -334,7 +449,7 @@ def realsense_loop(args: argparse.Namespace, shared: SharedFrames) -> None:
         profile = pipeline.start(config)
     except Exception as exc:
         shared.stats = {"status": "pipeline_start_failed", "error": str(exc), "aligned": False}
-        emit_control_payload(args, make_control_payload(shared.stats, None))
+        emit_control_payload(args, make_control_payload(shared.stats, None, pose_listener.get_pose_payload() if pose_listener else None))
         return
 
     align = rs.align(rs.stream.color)
@@ -356,7 +471,7 @@ def realsense_loop(args: argparse.Namespace, shared: SharedFrames) -> None:
             depth_frame = aligned.get_depth_frame()
             if not color_frame or not depth_frame:
                 shared.stats = {"status": "missing_frame", "frame": frame_id, "aligned": False}
-                emit_control_payload(args, make_control_payload(shared.stats, camera_fps(frame_times)))
+                emit_control_payload(args, make_control_payload(shared.stats, camera_fps(frame_times), pose_listener.get_pose_payload() if pose_listener else None))
                 continue
 
             now = time.time()
@@ -402,7 +517,7 @@ def realsense_loop(args: argparse.Namespace, shared: SharedFrames) -> None:
                         obstacles[-1]["model_class_name"] = model_class_name
             except Exception as exc:
                 shared.stats = {"status": "yolo_inference_failed", "error": str(exc), "aligned": True}
-                emit_control_payload(args, make_control_payload(shared.stats, camera_fps(frame_times)))
+                emit_control_payload(args, make_control_payload(shared.stats, camera_fps(frame_times), pose_listener.get_pose_payload() if pose_listener else None))
                 continue
 
             obstacles.sort(key=lambda obj: obj["z"] if obj.get("z") is not None else 999.0)
@@ -429,7 +544,7 @@ def realsense_loop(args: argparse.Namespace, shared: SharedFrames) -> None:
             fps = camera_fps(frame_times)
             control_interval = 0.0 if args.control_rate_hz <= 0.0 else 1.0 / args.control_rate_hz
             if args.control_jsonl and now - last_control_print >= control_interval:
-                emit_control_payload(args, make_control_payload(stats, fps))
+                emit_control_payload(args, make_control_payload(stats, fps, pose_listener.get_pose_payload() if pose_listener else None))
                 last_control_print = now
 
             if (not args.control_jsonl) and now - last_print >= 1.0:
@@ -576,7 +691,9 @@ setInterval(tick,1000);tick();
 def main() -> None:
     args = parse_args()
     shared = SharedFrames()
-    threading.Thread(target=realsense_loop, args=(args, shared), daemon=True).start()
+    pose_listener = PoseListener(args)
+    pose_listener.start()
+    threading.Thread(target=realsense_loop, args=(args, shared, pose_listener), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(shared))
     print(f"Open http://<jetson-ip>:{args.port}/ in your browser.", file=sys.stderr if args.control_jsonl else sys.stdout)
     try:
@@ -585,6 +702,7 @@ def main() -> None:
         pass
     finally:
         server.shutdown()
+        pose_listener.stop()
 
 
 if __name__ == "__main__":
