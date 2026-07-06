@@ -58,6 +58,7 @@ class TaskManagerNode(Node):
         self.hold_time = scoring.get('hold_time', 3.0)
         self.max_drops = scoring.get('max_drops', 3)
         self.total_grasps = scoring.get('total_grasps', 2)
+        self.configured_total_grasps = self.total_grasps
         self.zones_cfg = cfg.get('placement_zones', {})
 
         dg = cfg.get('direct_grasp', {})
@@ -92,6 +93,10 @@ class TaskManagerNode(Node):
         self._rollback_count = 0       # 回退次数, 防止死循环
         self._last_seen_cx = None      # 每次视觉成功时更新, 供回退用
 
+        self.auto_start_on_targets = bool(
+            self.declare_parameter('auto_start_on_targets', True).value
+        )
+
         # ── 订阅 ──────────────────────────────
         self.create_subscription(String, '/vision/grasp_pose', self._cb_vision, 10)
         self.create_subscription(String, '/inspection/target_zones', self._cb_inspection, 10)
@@ -111,6 +116,7 @@ class TaskManagerNode(Node):
         self.get_logger().info('═══════════════════════════════════════')
         self.get_logger().info('  任务管理节点就绪')
         self.get_logger().info('  等待巡检结果 (/inspection/target_zones)...')
+        self.get_logger().info(f'  auto_start_on_targets={self.auto_start_on_targets}')
         self.get_logger().info('═══════════════════════════════════════')
 
     # ══════════════════════════════════════════════════════════
@@ -124,7 +130,12 @@ class TaskManagerNode(Node):
         self.targets = [z.strip() for z in zs.split(',') if z.strip()] if zs else []
         self.get_logger().info(f'巡检结果: 异常区域 = {self.targets}')
         if self.targets:
-            self._start_task()
+            if self.auto_start_on_targets:
+                self._start_task()
+            else:
+                self.total_grasps = len(self.targets)
+                self.get_logger().info(
+                    '已记录异常区域，等待 /task/start 后再抓取红条')
         else:
             self.get_logger().info('无异常区域，无需抓取')
             self._set_state(self.DONE)
@@ -309,6 +320,10 @@ class TaskManagerNode(Node):
         self.zone_idx = 0
         self.grasp_cnt = 0
         self.drop_cnt = 0
+        if self.targets:
+            self.total_grasps = len(self.targets)
+        else:
+            self.total_grasps = self.configured_total_grasps
         self.get_logger().info(f'  ★★★ 开始抓取任务: {len(self.targets)} 个区域 ★★★')
         self._request_vision()
 

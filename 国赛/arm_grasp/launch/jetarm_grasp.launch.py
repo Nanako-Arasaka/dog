@@ -12,6 +12,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('config_path', default_value=config_path),
+        DeclareLaunchArgument('auto_start_on_targets', default_value='true'),
 
         # 节点1: 视觉识别
         Node(
@@ -50,7 +51,10 @@ def generate_launch_description():
             executable='task_manager_node',
             name='task_manager_node',
             output='screen',
-            parameters=[{'config_path': LaunchConfiguration('config_path')}]
+            parameters=[{
+                'config_path': LaunchConfiguration('config_path'),
+                'auto_start_on_targets': LaunchConfiguration('auto_start_on_targets'),
+            }]
         ),
 
         # 节点5: 可视化

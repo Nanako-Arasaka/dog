@@ -195,6 +195,28 @@ source install/setup.bash
 ros2 launch arm_grasp jetarm_grasp.launch.py
 ```
 
+如果需要按完整比赛阶段执行，也就是“巡检阶段只记录异常，机器人到长条抓取区后才开始抓红条”，启动机械臂任务管理时关闭自动开抓：
+
+```bash
+ros2 launch arm_grasp jetarm_grasp.launch.py auto_start_on_targets:=false
+```
+
+然后启动初步协调程序：
+
+```bash
+cd /home/jetson/yolo_deploy
+source /opt/ros/humble/setup.bash
+python3 tools/inspection_pick_place_coordinator.py
+```
+
+当导航或人工调试确认机器人已到长条抓取区后，发布：
+
+```bash
+ros2 topic pub --once /mission/event std_msgs/msg/String "data: 'pick_area_arrived'"
+```
+
+协调程序会读取已经冻结的 `/inspection/all`，记录 A/B/C/D 正常和异常状态，把异常区域队列发布到 `/inspection/target_zones`，并触发 `/task/start`。后续红条抓取、等待放置区字母、匹配目标纸箱和放置动作仍由 `arm_grasp/task_manager_node.py` 完成。
+
 手动发布巡检结果测试：
 
 ```bash
