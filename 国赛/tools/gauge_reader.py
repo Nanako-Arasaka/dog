@@ -12,6 +12,53 @@ from pathlib import Path
 from typing import Any
 
 
+def _patch_cv2_unicode_io() -> None:
+    try:
+        import cv2  # type: ignore
+        import numpy as np
+    except ImportError:
+        return
+    if getattr(cv2, "_dog_repo_unicode_io_patch", False):
+        return
+
+    original_imread = cv2.imread
+    original_imwrite = cv2.imwrite
+
+    def imread(path: str, flags: int = cv2.IMREAD_COLOR):
+        image = original_imread(path, flags)
+        if image is not None:
+            return image
+        try:
+            data = np.fromfile(str(path), dtype=np.uint8)
+            if data.size == 0:
+                return None
+            return cv2.imdecode(data, flags)
+        except OSError:
+            return None
+
+    def imwrite(path: str, image: Any, params: Any = None) -> bool:
+        ok = original_imwrite(path, image, params or [])
+        if ok:
+            return True
+        suffix = Path(path).suffix or ".jpg"
+        success, encoded = cv2.imencode(suffix, image, params or [])
+        if not success:
+            return False
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            encoded.tofile(str(path))
+            return True
+        except OSError:
+            return False
+
+    cv2.imread = imread
+    cv2.imwrite = imwrite
+    cv2._dog_repo_unicode_io_patch = True
+
+
+_patch_cv2_unicode_io()
+
+
 @dataclass(frozen=True)
 class GaugeReaderConfig:
     low_range: tuple[float, float] = (180.0, 250.0)
@@ -26,6 +73,7 @@ def try_cv2() -> Any:
         import cv2  # type: ignore
     except ImportError as exc:
         raise RuntimeError("OpenCV is required for gauge_reader.py") from exc
+    _patch_cv2_unicode_io()
     return cv2
 
 

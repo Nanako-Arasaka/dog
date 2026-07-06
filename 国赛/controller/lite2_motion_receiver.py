@@ -22,7 +22,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 
 CMD_STAND_SIT = 0x21010202
@@ -83,10 +83,14 @@ class Lite2Controller:
         robot_ip: str,
         robot_port: int,
         heartbeat_hz: float,
+        command_repeat: int = 1,
+        command_repeat_interval: float = 0.02,
         dry_run: bool = False,
     ) -> None:
         self.target = (robot_ip, robot_port)
         self.dry_run = dry_run
+        self.command_repeat = max(1, int(command_repeat))
+        self.command_repeat_interval = max(0.0, float(command_repeat_interval))
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._stop_event = threading.Event()
         self._heartbeat_interval = 1.0 / max(heartbeat_hz, 0.1)
@@ -101,10 +105,13 @@ class Lite2Controller:
 
     def send(self, code: int, value: int = 0, cmd_type: int = 0) -> None:
         packet = struct.pack("<3i", int(code), int(value), int(cmd_type))
-        if self.dry_run:
-            print(f"[dry-run] -> {self.target[0]}:{self.target[1]} code=0x{code:08X} value={value} type={cmd_type}")
-            return
-        self.sock.sendto(packet, self.target)
+        for index in range(self.command_repeat):
+            if self.dry_run:
+                print(f"[dry-run] -> {self.target[0]}:{self.target[1]} code=0x{code:08X} value={value} type={cmd_type}")
+            else:
+                self.sock.sendto(packet, self.target)
+            if index + 1 < self.command_repeat and self.command_repeat_interval > 0.0:
+                time.sleep(self.command_repeat_interval)
 
     def _heartbeat_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -141,6 +148,31 @@ class Lite2Controller:
             self.send(CMD_STAND_MODE, 0, 0)
         else:
             raise ValueError(f"unsupported action: {action}")
+
+
+def parse_startup_actions(raw: str) -> list[str]:
+    actions = []
+    for item in raw.split(","):
+        name = item.strip().lower()
+        if not name:
+            continue
+        action = ACTION_ALIASES.get(name)
+        if action is None:
+            raise ValueError(f"unknown startup action: {item}")
+        if action not in {"walk_gait", "crawl_gait", "stair_gait", "move_mode", "stand_mode", "stand_sit"}:
+            raise ValueError(f"startup action is not a Lite2 mode/gait action: {item}")
+        actions.append(action)
+    return actions
+
+
+def run_startup_sequence(controller: Lite2Controller, actions: Iterable[str], interval: float) -> None:
+    actions = list(actions)
+    if not actions:
+        return
+    print(f"[init] sending startup actions: {', '.join(actions)}")
+    for action in actions:
+        controller.apply_action(action)
+        time.sleep(max(0.0, interval))
 
 
 def clamp_int(value: float, limit: int) -> int:
@@ -379,6 +411,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robot-ip", default="192.168.1.120", help="Lite2 motion host IP.")
     parser.add_argument("--robot-port", type=int, default=43893, help="Lite2 motion command port.")
     parser.add_argument("--heartbeat-hz", type=float, default=4.0, help="Heartbeat frequency sent to Lite2.")
+    parser.add_argument("--command-repeat", type=int, default=2, help="Repeat each low-level Lite2 UDP command this many times.")
+    parser.add_argument("--command-repeat-interval", type=float, default=0.02, help="Delay between repeated Lite2 UDP commands.")
+    parser.add_argument("--startup-actions", default="move_mode,walk_gait", help="Comma-separated Lite2 mode/gait actions sent on startup; set empty to disable.")
+    parser.add_argument("--startup-action-interval", type=float, default=0.25, help="Delay between startup actions.")
     parser.add_argument("--timeout", type=float, default=0.8, help="Stop robot if no packet arrives for this many seconds.")
     parser.add_argument("--socket-timeout", type=float, default=0.05, help="UDP receive timeout.")
     parser.add_argument("--buffer-size", type=int, default=65535, help="UDP receive buffer size.")
@@ -408,7 +444,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    controller = Lite2Controller(args.robot_ip, args.robot_port, args.heartbeat_hz, dry_run=args.dry_run)
+    startup_actions = parse_startup_actions(args.startup_actions)
+    controller = Lite2Controller(
+        args.robot_ip,
+        args.robot_port,
+        args.heartbeat_hz,
+        command_repeat=args.command_repeat,
+        command_repeat_interval=args.command_repeat_interval,
+        dry_run=args.dry_run,
+    )
     rx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     rx_sock.bind((args.listen_ip, args.listen_port))
     rx_sock.settimeout(args.socket_timeout)
@@ -417,6 +461,7 @@ def main() -> None:
     print(f"Sending Lite2 commands to {args.robot_ip}:{args.robot_port}")
     if args.dry_run:
         print("Dry-run mode is enabled; robot commands are only printed.")
+    run_startup_sequence(controller, startup_actions, args.startup_action_interval)
 
     last_packet_time = time.monotonic()
     stopped_for_timeout = False

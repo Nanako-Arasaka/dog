@@ -1,16 +1,32 @@
-from ultralytics import YOLO
-import cv2
+"""YOLO 7-class gauge detection with MJPEG streaming.
+
+Uses the 7-class model: zone_A/B/C/D + gauge_low/normal/high.
+Status primarily comes directly from YOLO, then a short frame window stabilizes
+the displayed result.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter, deque
 import os
-import time
+import socket
 import subprocess
+import sys
+import threading
+import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+import cv2
+from ultralytics import YOLO
+
+from gauge_reader import read_gauge
 
 
-# =========================
-# 参数区：后续调试主要改这里
-# =========================
-MODEL_PATH = "/home/jetson/yolo_deploy/best.pt"
-CAMERA_ID = 0
-CAMERA_PATH = "/dev/video0"
+# ───────────────── 默认配置 ─────────────────
+MODEL_PATH = "/home/jetson/yolo_deploy/best_7class.pt"
+CAMERA_ID = 4
+CAMERA_PATH = "/dev/video4"
 CONF_THRES = 0.25
 IMG_SIZE = 416
 CAMERA_WIDTH = 640
@@ -19,118 +35,154 @@ CAMERA_FPS = 30
 DISPLAY_WIDTH = 960
 DISPLAY_HEIGHT = 540
 PRINT_INTERVAL = 1.0
+STREAM_PORT = 8080
+STREAM_JPEG_QUALITY = 70
+STATUS_HISTORY_SIZE = 7
+STATUS_STABLE_MIN_COUNT = 4
 
-WINDOW_NAME = "Jetson YOLO Live Detect"
-
-# 类别映射，必须与新的 best.pt 保持一致
-CLASS_NAMES = {
-    0: "zone_A",
-    1: "zone_B",
-    2: "zone_C",
-    3: "zone_D",
-    4: "gauge_low",
-    5: "gauge_normal",
-    6: "gauge_high",
-}
+WINDOW_NAME = "Jetson YOLO 7-Class Live Detect"
 
 ZONE_CLASSES = {"zone_A", "zone_B", "zone_C", "zone_D"}
-GAUGE_STATUS_TEXT = {
-    "gauge_low": "偏低",
-    "gauge_normal": "正常",
-    "gauge_high": "偏高",
+GAUGE_STATUS_MAP = {
+    "gauge_low": ("low", "偏低"),
+    "gauge_normal": ("normal", "正常"),
+    "gauge_high": ("high", "偏高"),
+}
+# cv2.putText cannot render Chinese with Hershey fonts, so on-frame text stays ASCII.
+GAUGE_STATUS_OVERLAY = {
+    "gauge_low": "LOW",
+    "gauge_normal": "NORMAL",
+    "gauge_high": "HIGH",
 }
 
 
-def check_environment():
-    """启动前检查模型和摄像头设备。"""
-    if not os.path.exists(MODEL_PATH):
-        print("[ERROR] Model file not found:")
-        print(MODEL_PATH)
-        return False
+# ───────────────── 线程安全的帧缓冲区 ─────────────────
+class FrameBuffer:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._frame = None
 
-    if not os.path.exists(CAMERA_PATH):
-        print("[ERROR] Camera device not found:")
-        print(CAMERA_PATH)
-        return False
+    def update(self, frame):
+        with self._lock:
+            self._frame = frame.copy()
 
+    def get(self):
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+
+# ───────────────── MJPEG HTTP 串流服务 ─────────────────
+class MJPEGHandler(BaseHTTPRequestHandler):
+    frame_buffer: FrameBuffer | None = None
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/" or self.path == "/stream":
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                while True:
+                    frame = MJPEGHandler.frame_buffer.get()
+                    if frame is not None:
+                        ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), STREAM_JPEG_QUALITY])
+                        if ret:
+                            self.wfile.write(b"--frame\r\n")
+                            self.wfile.write(b"Content-Type: image/jpeg\r\n\r\n")
+                            self.wfile.write(buf.tobytes())
+                            self.wfile.write(b"\r\n")
+                    time.sleep(0.03)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        elif self.path == "/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(
+                b"""<!DOCTYPE html>
+<html><head><meta charset=utf-8><title>YOLO Gauge Stream</title>
+<style>body{display:flex;justify-content:center;align-items:center;min-height:100vh;
+margin:0;background:#111}img{max-width:100vw;max-height:100vh}</style></head>
+<body><img src="/stream" alt="live stream"></body></html>"""
+            )
+        else:
+            self.send_response(302)
+            self.send_header("Location", "/status")
+            self.end_headers()
+
+
+def start_stream_server(port: int) -> HTTPServer:
+    server = HTTPServer(("0.0.0.0", port), MJPEGHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
+# ───────────────── 工具函数 ─────────────────
+def _get_lan_ip() -> str:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except OSError:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+
+def check_environment(model_path: str, camera_path: str) -> bool:
+    if not os.path.exists(model_path):
+        print(f"[ERROR] Model file not found: {model_path}")
+        return False
+    if not os.path.exists(camera_path):
+        print(f"[ERROR] Camera device not found: {camera_path}")
+        return False
     return True
 
 
-def run_v4l2_command(command):
-    """尝试执行 v4l2-ctl 命令；失败只警告，不中断程序。"""
+def configure_camera_exposure(camera_path: str) -> None:
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=2,
-        )
-        if result.returncode != 0:
-            msg = result.stderr.strip() or result.stdout.strip()
-            print(f"[WARNING] v4l2 control failed: {command}")
-            if msg:
-                print(f"[WARNING] {msg}")
-    except Exception as exc:
-        print(f"[WARNING] v4l2 control skipped: {command}")
-        print(f"[WARNING] {exc}")
+        subprocess.run(f"v4l2-ctl -d {camera_path} --set-ctrl=auto_exposure=3", shell=True, timeout=2,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 
-def configure_camera_exposure():
-    """尝试关闭自动曝光并锁定曝光值。"""
-    run_v4l2_command("v4l2-ctl -d /dev/video0 --set-ctrl=exposure_auto=1")
-    run_v4l2_command("v4l2-ctl -d /dev/video0 --set-ctrl=exposure_absolute=120")
-
-
-def open_camera():
-    """使用 V4L2 打开摄像头并设置低延迟参数。"""
-    cap = cv2.VideoCapture(CAMERA_ID, cv2.CAP_V4L2)
-
+def open_camera(camera_id: int) -> cv2.VideoCapture:
+    cap = cv2.VideoCapture(camera_id, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-
-    # OpenCV 层面尝试关闭自动曝光并锁定曝光；不保证每个摄像头都支持
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-    cap.set(cv2.CAP_PROP_EXPOSURE, -6)
-
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
     return cap
 
 
-def draw_text_with_background(frame, text, x, y, color):
-    """绘制带背景文字，提升实时画面可读性。"""
+# ───────────────── 绘制工具 ─────────────────
+def draw_text_with_background(frame, text: str, x: int, y: int, color: tuple[int, int, int]) -> None:
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.55
+    scale = 0.55
     thickness = 2
     padding = 4
-
-    text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
-    text_w, text_h = text_size
-
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
     x = max(int(x), 0)
-    y = max(int(y), text_h + padding * 2)
-    top_left = (x, y - text_h - padding * 2)
-    bottom_right = (x + text_w + padding * 2, y)
-
-    cv2.rectangle(frame, top_left, bottom_right, color, -1)
-    cv2.putText(
-        frame,
-        text,
-        (x + padding, y - padding),
-        font,
-        font_scale,
-        (0, 0, 0),
-        thickness,
-        cv2.LINE_AA,
-    )
+    y = max(int(y), th + padding * 2)
+    cv2.rectangle(frame, (x, y - th - padding * 2), (x + tw + padding * 2, y), color, -1)
+    cv2.putText(frame, text, (x + padding, y - padding), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
 
 
-def draw_overlay(frame, fps, object_count, zone_name, gauge_class):
-    """绘制 FPS、目标数量、推理尺寸和巡检结果。"""
-    status_text = GAUGE_STATUS_TEXT.get(gauge_class or "")
+def draw_overlay(frame, fps: float, object_count: int, zone_name: str | None,
+                 gauge_class: str | None, stream_url: str = "",
+                 gauge_override: str | None = None,
+                 raw_gauge_class: str | None = None,
+                 stable_count: int = 0) -> None:
     lines = [
         f"FPS: {fps:.1f}",
         f"Objects: {object_count}",
@@ -138,86 +190,108 @@ def draw_overlay(frame, fps, object_count, zone_name, gauge_class):
     ]
     if zone_name:
         lines.append(f"Zone: {zone_name}")
-    if status_text:
-        lines.append(f"Gauge: {status_text}")
-    if zone_name and status_text:
-        lines.append(f"Result: {zone_name} {status_text}")
+    if gauge_class:
+        status_en, _status_cn = GAUGE_STATUS_MAP.get(gauge_class, (gauge_class, gauge_class))
+        status_overlay = GAUGE_STATUS_OVERLAY.get(gauge_class, status_en.upper())
+        src_label = "yolo+color" if gauge_override else "yolo"
+        lines.append(f"Gauge: {status_overlay} ({status_en})  src={src_label} stable {stable_count}/{STATUS_HISTORY_SIZE}")
+        if raw_gauge_class and raw_gauge_class != gauge_class:
+            raw_en, _raw_cn = GAUGE_STATUS_MAP.get(raw_gauge_class, (raw_gauge_class, raw_gauge_class))
+            raw_overlay = GAUGE_STATUS_OVERLAY.get(raw_gauge_class, raw_en.upper())
+            lines.append(f"Raw gauge: {raw_overlay}")
+        if zone_name:
+            lines.append(f"Result: {zone_name} {status_overlay}")
+    if stream_url:
+        lines.append(f"Stream: {stream_url}")
 
     y = 32
     for line in lines:
-        cv2.putText(
-            frame,
-            line,
-            (20, y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
+        cv2.putText(frame, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
         y += 34
 
 
-def predict_with_fallback(model, frame, use_half):
-    """优先 half=True 推理；失败后自动回退 half=False。"""
+def predict_with_fallback(model: YOLO, frame, use_half: bool):
     try:
-        results = model.predict(
-            frame,
-            imgsz=IMG_SIZE,
-            conf=CONF_THRES,
-            device=0,
-            half=use_half,
-            verbose=False,
-        )
+        results = model.predict(frame, imgsz=IMG_SIZE, conf=CONF_THRES, device=0, half=use_half, verbose=False)
         return results, use_half
     except Exception as exc:
         if use_half:
-            print("[WARNING] YOLO half=True failed, fallback to half=False")
-            print(f"[WARNING] {exc}")
-            results = model.predict(
-                frame,
-                imgsz=IMG_SIZE,
-                conf=CONF_THRES,
-                device=0,
-                half=False,
-                verbose=False,
-            )
+            print(f"[WARNING] YOLO half=True failed, fallback to half=False: {exc}")
+            results = model.predict(frame, imgsz=IMG_SIZE, conf=CONF_THRES, device=0, half=False, verbose=False)
             return results, False
         raise
 
 
-def print_inspection_result(zone_name, gauge_class):
-    status_text = GAUGE_STATUS_TEXT.get(gauge_class or "")
-    if zone_name:
-        print(f"当前区域：{zone_name}")
-    if status_text:
-        print(f"仪表盘状态：{status_text}")
-    if zone_name and status_text:
-        print(f"巡检结果：{zone_name} 区域仪表盘{status_text}")
+def stabilize_gauge_result(raw_gauge_class: str | None, status_history: deque[str],
+                           last_stable_gauge: str | None) -> tuple[str | None, int]:
+    """Use a short majority-vote window to suppress single-frame YOLO jumps."""
+    if raw_gauge_class in GAUGE_STATUS_MAP:
+        status_history.append(raw_gauge_class)
+
+    if not status_history:
+        return last_stable_gauge, 0
+
+    stable_gauge, count = Counter(status_history).most_common(1)[0]
+    if count >= STATUS_STABLE_MIN_COUNT:
+        return stable_gauge, count
+
+    return last_stable_gauge or raw_gauge_class, count
 
 
-def main():
-    if not check_environment():
-        return
+# ───────────────── 主循环 ─────────────────
+def main() -> None:
+    sys.stdout.reconfigure(line_buffering=True)
 
-    # 先用 v4l2-ctl 尝试锁定曝光，失败不影响后续运行
-    configure_camera_exposure()
+    parser = argparse.ArgumentParser(description="YOLO 7-class gauge detection with MJPEG streaming")
+    parser.add_argument("--model", default=MODEL_PATH, help=f"YOLO model path (default: {MODEL_PATH})")
+    parser.add_argument("--camera-id", type=int, default=CAMERA_ID, help=f"Camera index (default: {CAMERA_ID})")
+    parser.add_argument("--camera-path", default=CAMERA_PATH, help=f"V4L2 device path (default: {CAMERA_PATH})")
+    parser.add_argument("--port", type=int, default=STREAM_PORT, help=f"Streaming port (default: {STREAM_PORT})")
+    parser.add_argument("--no-gui", action="store_true", help="Disable local OpenCV windows")
+    parser.add_argument("--no-stream", action="store_true", help="Disable MJPEG streaming")
+    args = parser.parse_args()
 
-    # 加载模型，不修改模型、不重新训练
-    model = YOLO(MODEL_PATH)
+    if not check_environment(args.model, args.camera_path):
+        sys.exit(1)
 
-    cap = open_camera()
+    configure_camera_exposure(args.camera_path)
+    model = YOLO(args.model)
+
+    class_names = getattr(model, "names", None) or {}
+    expected = {0: "zone_A", 1: "zone_B", 2: "zone_C", 3: "zone_D",
+                4: "gauge_low", 5: "gauge_normal", 6: "gauge_high"}
+    if class_names != expected:
+        print(f"[WARNING] Model classes differ from expected 7-class mapping")
+        print(f"  Expected: {expected}")
+        print(f"  Actual:   {class_names}")
+    print(f"[INFO] Model classes: {class_names}")
+
+    cap = open_camera(args.camera_id)
     if not cap.isOpened():
-        print("[ERROR] Failed to open camera:")
-        print(CAMERA_PATH)
-        return
+        print(f"[ERROR] Failed to open camera: {args.camera_path}")
+        sys.exit(1)
 
-    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW_NAME, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    frame_buffer = FrameBuffer()
+    MJPEGHandler.frame_buffer = frame_buffer
+    stream_server = None
+    stream_url = ""
+    if not args.no_stream:
+        stream_server = start_stream_server(args.port)
+        local_ip = _get_lan_ip()
+        stream_url = f"http://{local_ip}:{args.port}"
+        print(f"[INFO] MJPEG stream: {stream_url}")
+        print(f"[INFO] Open {stream_url} on your Mac/phone to watch")
+
+    if not args.no_gui:
+        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WINDOW_NAME, DISPLAY_WIDTH, DISPLAY_HEIGHT)
 
     prev_time = time.time()
     last_print_time = 0.0
     use_half = True
+    gauge_history: deque[str] = deque(maxlen=STATUS_HISTORY_SIZE)
+    last_stable_gauge: str | None = None
+    last_stable_zone: str | None = None
 
     try:
         while True:
@@ -226,12 +300,10 @@ def main():
                 print("[ERROR] Failed to read frame from camera")
                 break
 
-            # 计算整体循环 FPS，更接近实际显示刷新速度
             now = time.time()
             fps = 1.0 / max(now - prev_time, 1e-6)
             prev_time = now
 
-            # YOLO 推理，优先启用 FP16
             results, use_half = predict_with_fallback(model, frame, use_half)
             result = results[0]
 
@@ -240,20 +312,20 @@ def main():
             best_zone_conf = -1.0
             best_gauge = None
             best_gauge_conf = -1.0
-            detected_classes = set()
+            best_gauge_box = None
+            detected_classes: set[str] = set()
 
             if result.boxes is not None:
                 for box in result.boxes:
                     cls_id = int(box.cls[0].item())
                     conf = float(box.conf[0].item())
-
                     if conf < CONF_THRES:
                         continue
 
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                     x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
 
-                    class_name = CLASS_NAMES.get(cls_id, f"class_{cls_id}")
+                    class_name = class_names.get(cls_id, f"class_{cls_id}")
                     label = f"{class_name} {conf:.2f}"
 
                     object_count += 1
@@ -262,34 +334,69 @@ def main():
                     if class_name in ZONE_CLASSES and conf > best_zone_conf:
                         best_zone = class_name
                         best_zone_conf = conf
-                    elif class_name in GAUGE_STATUS_TEXT and conf > best_gauge_conf:
+                    elif class_name in GAUGE_STATUS_MAP and conf > best_gauge_conf:
                         best_gauge = class_name
                         best_gauge_conf = conf
+                        best_gauge_box = (x1, y1, x2, y2)
 
                     color = (0, 255, 0) if class_name in ZONE_CLASSES else (0, 180, 255)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                     draw_text_with_background(frame, label, x1, y1, color)
 
-            # 限频打印，避免每帧 print 拖慢实时性
+            # ── 色带兜底：YOLO 未识别为 high 时，用 gauge_reader 红色带检测纠正 ──
+            gauge_override = None
+            if best_gauge_box is not None and best_gauge != "gauge_high":
+                x1, y1, x2, y2 = best_gauge_box
+                gauge_roi = frame[y1:y2, x1:x2]
+                gr = read_gauge(gauge_roi)
+                if gr.get("status") == "high" and gr.get("status_source") == "color_band":
+                    gauge_override = "gauge_high"
+                    best_gauge = "gauge_high"
+
+            if best_zone is not None and best_zone != last_stable_zone:
+                gauge_history.clear()
+                last_stable_gauge = None
+                last_stable_zone = best_zone
+
+            stable_gauge, stable_count = stabilize_gauge_result(best_gauge, gauge_history, last_stable_gauge)
+            if stable_gauge is not None:
+                last_stable_gauge = stable_gauge
+
             if now - last_print_time >= PRINT_INTERVAL:
                 if detected_classes:
                     names = ", ".join(sorted(detected_classes))
                     print(f"Detected: {names}")
-                    print_inspection_result(best_zone, best_gauge)
+                if best_zone:
+                    status_en, status_cn = GAUGE_STATUS_MAP.get(stable_gauge or "", ("unknown", "未知"))
+                    override_info = " (color-band corrected)" if gauge_override else ""
+                    print(f"当前区域：{best_zone}")
+                    print(f"仪表盘状态：{status_cn} ({status_en})  src=yolo{override_info} stable={stable_count}/{STATUS_HISTORY_SIZE}")
+                    if best_gauge and best_gauge != stable_gauge:
+                        _raw_en, raw_cn = GAUGE_STATUS_MAP.get(best_gauge, (best_gauge, best_gauge))
+                        print(f"原始单帧状态：{raw_cn}")
+                    print(f"巡检结果：{best_zone} 区域仪表盘{status_cn}")
                 last_print_time = now
 
-            draw_overlay(frame, fps, object_count, best_zone, best_gauge)
+            draw_overlay(frame, fps, object_count, best_zone, stable_gauge, stream_url, gauge_override, best_gauge, stable_count)
 
-            # 固定显示尺寸，减少窗口自动缩放抖动
             display_frame = cv2.resize(frame, (DISPLAY_WIDTH, DISPLAY_HEIGHT))
-            cv2.imshow(WINDOW_NAME, display_frame)
+            frame_buffer.update(display_frame)
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+            if not args.no_gui:
+                cv2.imshow(WINDOW_NAME, display_frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+            else:
+                time.sleep(0.001)
 
+    except KeyboardInterrupt:
+        print("\n[INFO] Interrupted by user")
     finally:
         cap.release()
         cv2.destroyAllWindows()
+        if stream_server:
+            stream_server.shutdown()
+        print("[INFO] Shutdown complete")
 
 
 if __name__ == "__main__":
