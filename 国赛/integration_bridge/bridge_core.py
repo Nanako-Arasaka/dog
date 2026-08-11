@@ -11,6 +11,7 @@ from .schemas import (
     InspectionResult,
     PlacementZoneResult,
     format_inspection_all,
+    format_inspection_all_detailed,
     inspections_from_payload,
     placement_from_payload,
 )
@@ -49,6 +50,14 @@ class IntegrationBridge:
         self.logger.write({"type": "publish", "topic": "/inspection/all", "data": text})
         if self.publisher:
             self.publisher.publish_inspection_all(text)
+            # 详细结果（保留 low/high）；publisher 可能未实现该方法，做兜底
+            detailed_pub = getattr(self.publisher, "publish_inspection_all_detailed", None)
+            if callable(detailed_pub):
+                detailed_text = format_inspection_all_detailed(self.inspection_memory.values())
+                self.logger.write(
+                    {"type": "publish", "topic": "/inspection/all_detailed", "data": detailed_text}
+                )
+                detailed_pub(detailed_text)
         return text
 
     def handle_placement_payload(self, payload: str) -> str:

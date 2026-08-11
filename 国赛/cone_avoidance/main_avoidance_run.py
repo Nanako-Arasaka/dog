@@ -11,6 +11,8 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .avoidance_state_machine import AvoidanceStateMachine
+from .local_planner import LocalPlanner, RobotPose
+from .map_config import ObstacleZoneRect, load_map_config
 from .motion_sender import MotionSender
 from .models import ConeObstacle, ControlConfig, VelocityCommand
 
@@ -59,11 +61,49 @@ def _obstacles_from_payload(payload: dict[str, Any]) -> list[ConeObstacle]:
     return [ConeObstacle.from_mapping(item) for item in raw]
 
 
+def _pose_from_payload(payload: dict[str, Any]) -> RobotPose | None:
+    raw = payload.get("robot_pose", payload.get("pose"))
+    if not isinstance(raw, dict):
+        return None
+    return RobotPose.from_mapping(raw)
+
+
+def _path_from_payload(payload: dict[str, Any]) -> list[tuple[float, float]] | None:
+    raw = payload.get("global_path")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("payload field 'global_path' must be a list")
+    path: list[tuple[float, float]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            path.append((float(item["x"]), float(item["y"])))
+        else:
+            x, y = item[:2]
+            path.append((float(x), float(y)))
+    return path
+
+
+def _zone_from_payload(payload: dict[str, Any]) -> ObstacleZoneRect | None:
+    raw = payload.get("obstacle_zone_rect")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("payload field 'obstacle_zone_rect' must be an object")
+    return ObstacleZoneRect.from_mapping(raw)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read ConeObstacle JSON lines and send Lite2 avoidance velocity.")
     parser.add_argument("--receiver-ip", default="127.0.0.1")
     parser.add_argument("--receiver-port", type=int, default=5005)
     parser.add_argument("--config", default=None, help="Path to control.yaml; defaults to cone_avoidance/config/control.yaml.")
+    parser.add_argument("--planner", choices=("legacy", "local"), default="legacy")
+    parser.add_argument(
+        "--map-config",
+        default=str(Path(__file__).resolve().parent / "competition_map.yaml"),
+        help="Path to JSON-compatible YAML map for --planner local.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print commands without sending UDP.")
     parser.add_argument("--send-stop-on-exit", action="store_true", help="Send a final stop command on shutdown.")
     parser.add_argument("--motion-status-url", default=None, help="Optional HTTP endpoint for browser visualization, e.g. http://127.0.0.1:8080/motion.json.")
@@ -93,8 +133,14 @@ def post_motion_status(url: str | None, command: VelocityCommand, input_payload:
 def main() -> None:
     args = parse_args()
     config = load_control_config(args.config, args.receiver_ip, args.receiver_port)
-    machine = AvoidanceStateMachine(config)
-    machine.start()
+    machine = None
+    planner = None
+    if args.planner == "local":
+        global_path, obstacle_zone_rect = load_map_config(args.map_config)
+        planner = LocalPlanner(config=config, global_path=global_path, obstacle_zone_rect=obstacle_zone_rect)
+    else:
+        machine = AvoidanceStateMachine(config)
+        machine.start()
     sender = None if args.dry_run else MotionSender(config=config)
 
     try:
@@ -108,15 +154,29 @@ def main() -> None:
 
             obstacles = _obstacles_from_payload(payload)
             front_depth = payload.get("front_depth", payload.get("front_min_depth"))
-            command = machine.tick(
-                obstacles,
-                now=time.monotonic(),
-                front_depth=float(front_depth) if front_depth is not None else None,
-                aligned_depth_ok=payload.get("aligned_depth_ok"),
-                depth_valid_ratio=payload.get("depth_valid_ratio"),
-                realsense_fps=payload.get("realsense_fps", payload.get("camera_fps")),
-                realsense_ok=payload.get("realsense_ok", payload.get("camera_ok")),
-            )
+            if planner is not None:
+                command = planner.plan(
+                    cones=obstacles,
+                    robot_pose=_pose_from_payload(payload),
+                    global_path=_path_from_payload(payload),
+                    obstacle_zone_rect=_zone_from_payload(payload),
+                    front_depth=float(front_depth) if front_depth is not None else None,
+                    aligned_depth_ok=payload.get("aligned_depth_ok"),
+                    depth_valid_ratio=payload.get("depth_valid_ratio"),
+                    realsense_fps=payload.get("realsense_fps", payload.get("camera_fps")),
+                    realsense_ok=payload.get("realsense_ok", payload.get("camera_ok")),
+                )
+            else:
+                assert machine is not None
+                command = machine.tick(
+                    obstacles,
+                    now=time.monotonic(),
+                    front_depth=float(front_depth) if front_depth is not None else None,
+                    aligned_depth_ok=payload.get("aligned_depth_ok"),
+                    depth_valid_ratio=payload.get("depth_valid_ratio"),
+                    realsense_fps=payload.get("realsense_fps", payload.get("camera_fps")),
+                    realsense_ok=payload.get("realsense_ok", payload.get("camera_ok")),
+                )
             print(command.log_line(), flush=True)
             post_motion_status(args.motion_status_url, command, payload)
             if sender is not None:

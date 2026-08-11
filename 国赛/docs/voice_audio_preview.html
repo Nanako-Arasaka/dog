@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>国赛播报音频预览</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #9aa0a6; font-size: 13px; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .card { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 10px; padding: 14px 16px; }
+  .card .name { font-weight: 600; font-size: 15px; margin-bottom: 4px; color: #ffd479; }
+  .card .meta { font-size: 12px; color: #9aa0a6; margin-bottom: 10px; }
+  audio { width: 100%; height: 36px; }
+  .zone-A { border-left: 4px solid #ff6b6b; }
+  .zone-B { border-left: 4px solid #4dabf7; }
+  .zone-C { border-left: 4px solid #51cf66; }
+  .zone-D { border-left: 4px solid #cc5de8; }
+</style>
+</head>
+<body>
+  <h1>国赛语音播报音频预览</h1>
+  <div class="sub">12 个文件：A/B/C/D × 偏低(low)/正常(normal)/偏高(high) · mono 22050Hz 16-bit PCM · 点击播放即可试听</div>
+  <div class="grid">
+    <div class="card zone-A"><div class="name">A · 偏低 (A_low)</div><div class="meta">1.90s</div><audio controls src="output/audio/A_low.wav"></audio></div>
+    <div class="card zone-A"><div class="name">A · 正常 (A_normal)</div><div class="meta">1.98s</div><audio controls src="output/audio/A_normal.wav"></audio></div>
+    <div class="card zone-A"><div class="name">A · 偏高 (A_high)</div><div class="meta">1.95s</div><audio controls src="output/audio/A_high.wav"></audio></div>
+    <div class="card zone-B"><div class="name">B · 偏低 (B_low)</div><div class="meta">1.95s</div><audio controls src="output/audio/B_low.wav"></audio></div>
+    <div class="card zone-B"><div class="name">B · 正常 (B_normal)</div><div class="meta">2.02s</div><audio controls src="output/audio/B_normal.wav"></audio></div>
+    <div class="card zone-B"><div class="name">B · 偏高 (B_high)</div><div class="meta">1.98s</div><audio controls src="output/audio/B_high.wav"></audio></div>
+    <div class="card zone-C"><div class="name">C · 偏低 (C_low)</div><div class="meta">2.10s</div><audio controls src="output/audio/C_low.wav"></audio></div>
+    <div class="card zone-C"><div class="name">C · 正常 (C_normal)</div><div class="meta">2.17s</div><audio controls src="output/audio/C_normal.wav"></audio></div>
+    <div class="card zone-C"><div class="name">C · 偏高 (C_high)</div><div class="meta">2.14s</div><audio controls src="output/audio/C_high.wav"></audio></div>
+    <div class="card zone-D"><div class="name">D · 偏低 (D_low)</div><div class="meta">1.96s</div><audio controls src="output/audio/D_low.wav"></audio></div>
+    <div class="card zone-D"><div class="name">D · 正常 (D_normal)</div><div class="meta">2.03s</div><audio controls src="output/audio/D_normal.wav"></audio></div>
+    <div class="card zone-D"><div class="name">D · 偏高 (D_high)</div><div class="meta">2.00s</div><audio controls src="output/audio/D_high.wav"></audio></div>
+  </div>
+</body>
+</html>

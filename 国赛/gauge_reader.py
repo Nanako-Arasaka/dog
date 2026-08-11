@@ -7,16 +7,10 @@ ROI; this code estimates the pointer angle and maps it to low/normal/high.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
-
-
-GaugeResult = Dict[str, Any]
-Point = Tuple[float, float]
-Circle = Tuple[float, float, float]
-AngleSpan = Tuple[float, float, float]
 
 
 # Fallback gauge angle thresholds for the current competition gauge.
@@ -24,24 +18,27 @@ AngleSpan = Tuple[float, float, float]
 # when the camera position, gauge type, or installation angle changes.
 # The main status decision below first tries to use the colored dial bands
 # because image-space pointer angle changes when the handheld camera rotates.
-LOW_MAX_ANGLE = 25.0
-NORMAL_MIN_ANGLE = 25.0
-NORMAL_MAX_ANGLE = 55.0
-HIGH_MIN_ANGLE = 55.0
+#
+# Angle ranges (degrees, from _angle_from_center: 0°=right, 90°=up, 180°=left):
+HIGH_MAX_ANGLE = 15.0          # angle <= this → high (pointer far right)
+LOW_MIN_ANGLE = 120.0          # angle >= this → low (pointer far left)
+ANGLE_VALID_MAX = 180.0        # beyond this, angle is unreliable → unknown
+# Normal = everything between HIGH_MAX_ANGLE and LOW_MIN_ANGLE
 
 COLOR_BAND_EDGE_MARGIN_DEG = 8.0
-DIAL_MIN_SIZE = 40
-MIN_MASK_PIXEL_COUNT = 20
-
-RED_HSV_RANGES = (
-    (np.array([0, 80, 45]), np.array([12, 255, 255])),
-    (np.array([168, 80, 45]), np.array([179, 255, 255])),
-)
-YELLOW_HSV_RANGE = (np.array([12, 25, 35]), np.array([55, 255, 255]))
+COLOR_BAND_MAX_SPAN_DEG = 200.0  # reject spans wider than this (noise, not a real band)
 
 
-def _unknown() -> GaugeResult:
-    return {"angle": None, "status": "unknown", "success": False}
+def _unknown(pointer_detected: bool = False) -> dict[str, Any]:
+    return {
+        "angle": None,
+        "status": "unknown",
+        "success": False,
+        "circle_found": False,
+        "status_source": "unknown",
+        "color_band_detected": False,
+        "pointer_detected": pointer_detected,
+    }
 
 
 def _angle_from_center(cx: float, cy: float, x: float, y: float) -> float:
@@ -51,9 +48,18 @@ def _angle_from_center(cx: float, cy: float, x: float, y: float) -> float:
 
 
 def _status_from_angle(angle: float) -> str:
-    # Image-space angle is unstable when the handheld camera rolls or tilts.
-    # Once a pointer angle is found, treat non-extreme readings as normal unless
-    # the colored dial-band check clearly proves low or high.
+    """Fallback: determine gauge status from pointer angle alone.
+
+    Only used when color-band detection fails.  Returns "unknown" when
+    the angle falls outside the calibrated valid range so that we never
+    silently misclassify an abnormal reading as normal.
+    """
+    if angle > ANGLE_VALID_MAX:
+        return "unknown"
+    if angle <= HIGH_MAX_ANGLE:
+        return "high"
+    if angle >= LOW_MIN_ANGLE:
+        return "low"
     return "normal"
 
 
@@ -63,7 +69,7 @@ def _angle_distance(a: np.ndarray | float, b: float) -> np.ndarray | float:
 
 def _mask_angles(mask: np.ndarray, cx: float, cy: float) -> np.ndarray:
     ys, xs = np.where(mask)
-    if xs.size < MIN_MASK_PIXEL_COUNT:
+    if xs.size < 20:
         return np.array([], dtype=np.float32)
 
     dx = xs.astype(np.float32) - cx
@@ -71,8 +77,8 @@ def _mask_angles(mask: np.ndarray, cx: float, cy: float) -> np.ndarray:
     return (np.degrees(np.arctan2(dy, dx)) + 360.0) % 360.0
 
 
-def _angle_span(angles: np.ndarray) -> AngleSpan | None:
-    if angles.size < MIN_MASK_PIXEL_COUNT:
+def _angle_span(angles: np.ndarray) -> tuple[float, float, float] | None:
+    if angles.size < 20:
         return None
 
     sorted_angles = np.sort(angles.astype(np.float32) % 360.0)
@@ -84,9 +90,9 @@ def _angle_span(angles: np.ndarray) -> AngleSpan | None:
     return start, end, width
 
 
-def _angle_in_span(angle: float, span: AngleSpan, margin: float = 0.0) -> bool:
+def _angle_in_span(angle: float, span: tuple[float, float, float], margin: float = 0.0) -> bool:
     start, end, width = span
-    if width <= 0.0 or width > 160.0:
+    if width <= 0.0 or width > COLOR_BAND_MAX_SPAN_DEG:
         return False
     relative = (angle - start) % 360.0
     return relative <= width + margin or relative >= 360.0 - margin
@@ -101,19 +107,29 @@ def _status_from_color_bands(roi: Any, pointer_angle: float, cx: float, cy: floa
     rr = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
     annulus = (rr >= radius * 0.42) & (rr <= radius * 0.98)
 
-    red_mask = np.zeros(hsv.shape[:2], dtype=bool)
-    for lower, upper in RED_HSV_RANGES:
-        red_mask |= cv2.inRange(hsv, lower, upper) > 0
-    red_mask &= annulus
+    red1 = cv2.inRange(hsv, np.array([0, 65, 40]), np.array([12, 255, 255])) > 0
+    red2 = cv2.inRange(hsv, np.array([168, 65, 40]), np.array([179, 255, 255])) > 0
+    red_mask = (red1 | red2) & annulus
+    yellow_mask = (cv2.inRange(hsv, np.array([12, 30, 30]), np.array([55, 255, 255])) > 0) & annulus
 
-    yellow_lower, yellow_upper = YELLOW_HSV_RANGE
-    yellow_mask = (cv2.inRange(hsv, yellow_lower, yellow_upper) > 0) & annulus
+    red_pixels = int(np.sum(red_mask))
+    yellow_pixels = int(np.sum(yellow_mask))
+    annulus_pixels = int(np.sum(annulus))
 
-    red_span = _angle_span(_mask_angles(red_mask, cx, cy))
-    yellow_span = _angle_span(_mask_angles(yellow_mask, cx, cy))
+    red_angles = _mask_angles(red_mask, cx, cy)
+    yellow_angles = _mask_angles(yellow_mask, cx, cy)
+    red_span = _angle_span(red_angles)
+    yellow_span = _angle_span(yellow_angles)
+
+    print(f"[DEBUG color_bands] annulus_px={annulus_pixels} red_px={red_pixels} yellow_px={yellow_pixels} "
+          f"red_angles_n={red_angles.size} yellow_angles_n={yellow_angles.size} "
+          f"pointer_angle={pointer_angle:.1f} circle=({cx:.0f},{cy:.0f}) r={radius:.0f} "
+          f"red_span={red_span} yellow_span={yellow_span}")
 
     high_hit = red_span is not None and _angle_in_span(pointer_angle, red_span, COLOR_BAND_EDGE_MARGIN_DEG)
     low_hit = yellow_span is not None and _angle_in_span(pointer_angle, yellow_span, COLOR_BAND_EDGE_MARGIN_DEG)
+
+    print(f"[DEBUG color_bands] high_hit={high_hit} low_hit={low_hit}")
 
     if high_hit and not low_hit:
         return "high"
@@ -122,10 +138,10 @@ def _status_from_color_bands(roi: Any, pointer_angle: float, cx: float, cy: floa
     return None
 
 
-def _find_gauge_circle(gray: np.ndarray) -> Circle | None:
+def _detect_gauge_circle(gray: np.ndarray) -> tuple[float, float, float] | None:
     h, w = gray.shape[:2]
     min_side = min(w, h)
-    if min_side < DIAL_MIN_SIZE:
+    if min_side < 40:
         return None
 
     blurred = cv2.medianBlur(gray, 5)
@@ -143,7 +159,7 @@ def _find_gauge_circle(gray: np.ndarray) -> Circle | None:
         return None
 
     candidates = np.round(circles[0, :]).astype("int")
-    best: Circle | None = None
+    best: tuple[float, float, float] | None = None
     best_score = -1.0
     for x, y, r in candidates:
         if x - r < -w * 0.05 or y - r < -h * 0.05 or x + r > w * 1.05 or y + r > h * 1.05:
@@ -182,7 +198,7 @@ def _choose_pointer_line(lines: Any, cx: float, cy: float, radius: float) -> tup
     return best
 
 
-def _choose_dark_tip(gray: np.ndarray, cx: float, cy: float, radius: float) -> Point | None:
+def _choose_dark_tip(gray: np.ndarray, cx: float, cy: float, radius: float) -> tuple[float, float] | None:
     yy, xx = np.indices(gray.shape)
     rr = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
     threshold = float(np.percentile(gray, 18))
@@ -195,7 +211,7 @@ def _choose_dark_tip(gray: np.ndarray, cx: float, cy: float, radius: float) -> P
     return float(xs[idx]), float(ys[idx])
 
 
-def read_gauge(gauge_roi: Any, debug: bool = False) -> GaugeResult:
+def read_gauge(gauge_roi: Any, debug: bool = False) -> dict[str, Any]:
     """Read gauge angle and status from a cropped ROI.
 
     Args:
@@ -223,7 +239,7 @@ def read_gauge(gauge_roi: Any, debug: bool = False) -> GaugeResult:
     gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
     edges = cv2.Canny(gray, 45, 140)
 
-    circle = _find_gauge_circle(gray)
+    circle = _detect_gauge_circle(gray)
     if circle is None:
         cx = w / 2.0
         cy = h / 2.0
@@ -252,12 +268,30 @@ def read_gauge(gauge_roi: Any, debug: bool = False) -> GaugeResult:
         tip_x, tip_y = fallback
 
     angle = round(float(_angle_from_center(cx, cy, tip_x, tip_y)), 2)
-    status = _status_from_color_bands(gauge_roi, angle, cx, cy, radius) or _status_from_angle(angle)
+    print(f"[DEBUG read_gauge] circle_found={circle_found} cx={cx:.1f} cy={cy:.1f} radius={radius:.1f} "
+          f"roi_shape=({w},{h}) pointer_angle={angle}")
+
+    # ── status decision: color-band first, then angle fallback ──
+    color_result = _status_from_color_bands(gauge_roi, angle, cx, cy, radius)
+    if color_result is not None:
+        status = color_result
+        status_source = "color_band"
+        color_band_detected = True
+    else:
+        status = _status_from_angle(angle)
+        status_source = "angle"
+        color_band_detected = False
+
+    print(f"[DEBUG read_gauge] status={status} source={status_source}")
+
     result: dict[str, Any] = {
         "angle": angle,
         "status": status,
         "success": True,
         "circle_found": circle_found,
+        "status_source": status_source,
+        "color_band_detected": color_band_detected,
+        "pointer_detected": True,
     }
 
     if debug:

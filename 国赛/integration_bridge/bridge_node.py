@@ -7,7 +7,8 @@ Subscriptions:
   /bridge/placement_zone     std_msgs/String JSON, "A", or "zone_A"
 
 Publications:
-  /inspection/all            std_msgs/String "A:abnormal,B:normal,C:unknown,D:unknown"
+  /inspection/all            std_msgs/String "A:abnormal,B:normal,C:unknown,D:unknown" (FSM 消费)
+  /inspection/all_detailed   std_msgs/String "A:low,B:normal,C:high,D:normal"        (语音播报消费，保留偏低/偏高)
   /placement/recognized_zone std_msgs/String "A"
 """
 
@@ -35,6 +36,9 @@ COMPETITION_STATE_TOPIC = "/competition/state"
 class PrintPublisher:
     def publish_inspection_all(self, text: str) -> None:
         print(f"/inspection/all <- {text}")
+
+    def publish_inspection_all_detailed(self, text: str) -> None:
+        print(f"/inspection/all_detailed <- {text}")
 
     def publish_placement_zone(self, zone: str) -> None:
         print(f"/placement/recognized_zone <- {zone}")
@@ -90,6 +94,7 @@ def run_ros(args: argparse.Namespace) -> int:
             self.freeze_inspection = not args.no_freeze_inspection
             self.freezer = InspectionFreezer(stable_count=args.zone_stable_count)
             self.frozen_inspection_text = None
+            self.frozen_inspection_text_detailed = None
             self.last_frozen_publish_time = 0.0
             self.pub_state = self.create_publisher(String, COMPETITION_STATE_TOPIC, 10)
             self.create_subscription(
@@ -132,6 +137,7 @@ def run_ros(args: argparse.Namespace) -> int:
                 return
             self.freezer.reset()
             self.frozen_inspection_text = None
+            self.frozen_inspection_text_detailed = None
             self.bridge.inspection_memory.clear()
             self._publish_state("WAITING_INSPECTION")
             self.get_logger().info("inspection freeze reset")
@@ -147,6 +153,7 @@ def run_ros(args: argparse.Namespace) -> int:
 
             if self.freezer.is_complete() and self.frozen_inspection_text is None:
                 self.frozen_inspection_text = self.freezer.frozen_text()
+                self.frozen_inspection_text_detailed = self.freezer.frozen_text_detailed()
                 self.bridge.logger.write(
                     {
                         "type": "inspection_frozen",
@@ -154,13 +161,32 @@ def run_ros(args: argparse.Namespace) -> int:
                         "data": self.frozen_inspection_text,
                     }
                 )
+                self.bridge.logger.write(
+                    {
+                        "type": "inspection_frozen_detailed",
+                        "topic": "/inspection/all_detailed",
+                        "data": self.frozen_inspection_text_detailed,
+                    }
+                )
                 self.bridge.publisher.publish_inspection_all(self.frozen_inspection_text)
+                self._publish_detailed(self.frozen_inspection_text_detailed)
                 self._publish_state(f"INSPECTION_FROZEN:{self.frozen_inspection_text}")
                 self.get_logger().info(f"published frozen /inspection/all: {self.frozen_inspection_text}")
+                self.get_logger().info(
+                    f"published frozen /inspection/all_detailed: {self.frozen_inspection_text_detailed}"
+                )
 
         def _on_timer(self):
             if self.frozen_inspection_text:
                 self.bridge.publisher.publish_inspection_all(self.frozen_inspection_text)
+                if self.frozen_inspection_text_detailed:
+                    self._publish_detailed(self.frozen_inspection_text_detailed)
+
+        def _publish_detailed(self, text: str):
+            """发布 /inspection/all_detailed（publisher 可能未实现该方法，做兜底）。"""
+            pub = getattr(self.bridge.publisher, "publish_inspection_all_detailed", None)
+            if callable(pub):
+                pub(text)
 
         def _publish_state(self, state: str):
             self.pub_state.publish(String(data=state))

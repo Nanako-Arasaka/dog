@@ -111,5 +111,5 @@ scoring:
   max_drops: 3                  # 掉落3次比赛结束
   drop_penalty: -5
   max_penalty: -10
-  total_grasps: 2               # 共需抓取2次
+  total_grasps: 2               # 默认值；正式任务启动时会按异常区域数量动态覆盖
   max_time: 600                 # 正赛10分钟

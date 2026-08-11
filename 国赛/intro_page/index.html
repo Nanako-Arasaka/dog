@@ -1,0 +1,903 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DOG · 国赛联调方案 — 智能巡检四足机器人</title>
+  <meta name="description" content="2026 中国高校智能机器人创意大赛(四足大型组)· Jetson + Lite2 + JetArm 联调方案" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles/main.css" />
+</head>
+<body>
+  <!-- 顶部刻度尺 HUD -->
+  <div class="hud-top" aria-hidden="true">
+    <div class="hud-top__left">
+      <span class="hud-dot"></span>
+      <span class="hud-label">SYS · ONLINE</span>
+      <span class="hud-divider"></span>
+      <span class="hud-label hud-label--mono">DOG / 国赛联调</span>
+    </div>
+    <div class="hud-top__right">
+      <span class="hud-label hud-label--mono" id="hud-clock">--:--:--</span>
+      <span class="hud-divider"></span>
+      <span class="hud-label">COMPETITION 2026</span>
+    </div>
+  </div>
+
+  <!-- 网格背景层 -->
+  <div class="grid-bg" aria-hidden="true"></div>
+  <div class="grid-bg grid-bg--radial" aria-hidden="true"></div>
+
+  <main class="page">
+
+    <!-- ========== HERO ========== -->
+    <section class="hero">
+      <div class="hero__inner">
+        <div class="hero__meta">
+          <span class="chip chip--outline">
+            <span class="chip__dot"></span>
+            四足机器人 · 国赛作品
+          </span>
+          <span class="chip chip--ghost">Team · [团队名]</span>
+        </div>
+
+        <h1 class="hero__title">
+          <span class="hero__line-1">DOG · <span class="hero__accent">国赛</span></span>
+          <span class="hero__line-2">智能巡检四足机器人</span>
+        </h1>
+
+        <p class="hero__lede">
+          面向<strong>2026 中国高校智能机器人创意大赛(四足大型组)</strong>的联调方案——
+          Jetson Xavier NX 跑 YOLOv8 巡检识别、ROS2 转发巡检与放置区状态、
+          Lite2 机器狗只做底层运动执行与 watchdog,
+          JetArm 机械臂按冻结后的异常区执行<em>抓红条 → 保持夹紧 → 目标区松爪</em>。
+        </p>
+
+        <!-- 技术参数条(来自真实配置) -->
+        <div class="tech-stat-strip" role="list">
+          <div class="tech-stat" role="listitem">
+            <div class="tech-stat__value"><span class="num" data-target="30" data-suffix="">0</span><span class="unit">FPS</span></div>
+            <div class="tech-stat__label">巡检帧率</div>
+            <div class="tech-stat__note">640×480 · /dev/video4</div>
+          </div>
+          <div class="tech-stat" role="listitem">
+            <div class="tech-stat__value"><span class="num" data-target="7" data-suffix="">0</span><span class="unit">类</span></div>
+            <div class="tech-stat__label">YOLO 自训练</div>
+            <div class="tech-stat__note">A/B/C/D · gauge l/n/h</div>
+          </div>
+          <div class="tech-stat" role="listitem">
+            <div class="tech-stat__value"><span class="num" data-target="13" data-suffix="">0</span><span class="unit">topic</span></div>
+            <div class="tech-stat__label">ROS2 通信</div>
+            <div class="tech-stat__note">std_msgs/String</div>
+          </div>
+          <div class="tech-stat" role="listitem">
+            <div class="tech-stat__value"><span class="num" data-target="3" data-suffix="">0</span><span class="unit">帧</span></div>
+            <div class="tech-stat__label">状态冻结阈值</div>
+            <div class="tech-stat__note">InspectionFreezer</div>
+          </div>
+        </div>
+      </div>
+
+      <a href="#challenge" class="hero__scroll" aria-label="向下滚动">
+        <span class="hero__scroll-line"></span>
+        <span class="hero__scroll-text">SCROLL</span>
+      </a>
+    </section>
+
+    <!-- ========== 01 技术挑战 ========== -->
+    <section class="section" id="challenge">
+      <header class="section__header">
+        <span class="section__index">01</span>
+        <h2 class="section__title">国赛现场要解决的工程问题</h2>
+        <p class="section__sub">从比赛任务书和现场部署条件抽象出来的具体难点。</p>
+      </header>
+
+      <div class="pain-grid">
+        <article class="pain-card">
+          <div class="pain-card__num">C1</div>
+          <h3 class="pain-card__title">巡检识别要稳定不能抖</h3>
+          <p class="pain-card__desc">
+            比赛要求机器人<strong>逐区识别</strong> A/B/C/D 四个区并判断
+            <code>low / normal / high</code>。单帧 YOLO 输出容易抖,
+            一旦提前把"还没看完"的局部结果发给机械臂,
+            就会出现"明明 A 正常却被抓红条"的低级失误。
+          </p>
+          <div class="pain-card__metric">
+            <div class="pain-card__metric-num">4</div>
+            <div class="pain-card__metric-label">区 · 全部冻结</div>
+          </div>
+        </article>
+
+        <article class="pain-card pain-card--accent">
+          <div class="pain-card__num">C2</div>
+          <h3 class="pain-card__title">机械臂不能按时间松爪</h3>
+          <p class="pain-card__desc">
+            任务流程是<em>抓红条 → 走到放置区 → 识别到目标字母 → 松爪</em>。
+            固定时长松手会让红条掉在错误的位置上;
+            必须让机械臂任务状态机把<strong>放置区识别结果</strong>
+            当成触发条件,而非定时器。
+          </p>
+          <div class="pain-card__metric">
+            <div class="pain-card__metric-num">2</div>
+            <div class="pain-card__metric-label">ROS2 同步点</div>
+          </div>
+        </article>
+
+        <article class="pain-card">
+          <div class="pain-card__num">C3</div>
+          <h3 class="pain-card__title">Lite2 狗端算力不够</h3>
+          <p class="pain-card__desc">
+            Lite2 本体不适合跑 YOLO、OpenCV 读表、ORB-SLAM3、复杂 ROS2 状态机。
+            必须把<strong>所有感知与决策都下沉到 Jetson</strong>,
+            狗端只接 <code>vx / vy / wz</code> 或 Lite2 原生命令,
+            并保留 watchdog 超时停机。
+          </p>
+          <div class="pain-card__metric">
+            <div class="pain-card__metric-num">2</div>
+            <div class="pain-card__metric-label">节点 · Jetson ↔ 狗</div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ========== 02 系统架构 ========== -->
+    <section class="section section--alt" id="arch">
+      <header class="section__header">
+        <span class="section__index">02</span>
+        <h2 class="section__title">系统架构与真实数据流</h2>
+        <p class="section__sub">下面这张图全部来自 README 与实际代码。</p>
+      </header>
+
+      <div class="arch-wrap">
+        <svg class="arch-svg" viewBox="0 0 880 360" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="gradAccent" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#F5A623" stop-opacity="0.0"/>
+              <stop offset="50%" stop-color="#F5A623" stop-opacity="0.9"/>
+              <stop offset="100%" stop-color="#F5A623" stop-opacity="0.0"/>
+            </linearGradient>
+          </defs>
+
+          <g stroke="#1F2630" stroke-width="0.5" opacity="0.5">
+            <line x1="0" y1="60"  x2="880" y2="60"/>
+            <line x1="0" y1="150" x2="880" y2="150"/>
+            <line x1="0" y1="240" x2="880" y2="240"/>
+            <line x1="0" y1="330" x2="880" y2="330"/>
+          </g>
+
+          <!-- L4 狗端 Lite2 -->
+          <g>
+            <rect x="40" y="30" width="800" height="56" fill="#0B0E13" stroke="#8A93A6"/>
+            <text x="60" y="52" fill="#8A93A6" font-family="JetBrains Mono" font-size="10" letter-spacing="2">L1 · 设备层</text>
+            <text x="60" y="74" fill="#E6E8EC" font-family="Space Grotesk" font-size="13">Lite2 机器狗 · JetArm 机械臂 · /dev/video4 相机</text>
+          </g>
+
+          <!-- L3 Jetson 视觉 -->
+          <g>
+            <rect x="40" y="120" width="800" height="56" fill="#161B25" stroke="#F5A623" stroke-width="1.5"/>
+            <text x="60" y="142" fill="#F5A623" font-family="JetBrains Mono" font-size="10" letter-spacing="2">L2 · JETSON 感知  ★  CORE</text>
+            <text x="60" y="164" fill="#E6E8EC" font-family="Space Grotesk" font-size="13">live_detect_yolo_opencv · gauge_reader · cone_strategy · 目标点控制</text>
+          </g>
+
+          <!-- L2 ROS2 + bridge -->
+          <g>
+            <rect x="40" y="210" width="800" height="56" fill="#11151D" stroke="#5DD3B7"/>
+            <text x="60" y="232" fill="#5DD3B7" font-family="JetBrains Mono" font-size="10" letter-spacing="2">L3 · ROS2 + integration_bridge</text>
+            <text x="60" y="254" fill="#E6E8EC" font-family="Space Grotesk" font-size="13">std_msgs/String 转发 · InspectionFreezer · 状态机</text>
+          </g>
+
+          <!-- L1 通信 -->
+          <g>
+            <rect x="40" y="300" width="800" height="56" fill="#11151D" stroke="#8A93A6"/>
+            <text x="60" y="322" fill="#8A93A6" font-family="JetBrains Mono" font-size="10" letter-spacing="2">L4 · 通信与执行</text>
+            <text x="60" y="344" fill="#E6E8EC" font-family="Space Grotesk" font-size="13">UDP 5005 (JSON) → Lite2 43893 · vision_server TCP 9800 · HTTP 8080 推流</text>
+          </g>
+
+          <line x1="120" y1="86"  x2="120" y2="120" stroke="#F5A623" stroke-width="1" opacity="0.6"/>
+          <line x1="760" y1="86"  x2="760" y2="120" stroke="#F5A623" stroke-width="1" opacity="0.6"/>
+          <line x1="120" y1="176" x2="120" y2="210" stroke="#5DD3B7" stroke-width="1" opacity="0.6"/>
+          <line x1="760" y1="176" x2="760" y2="210" stroke="#5DD3B7" stroke-width="1" opacity="0.6"/>
+          <line x1="120" y1="266" x2="120" y2="300" stroke="#8A93A6" stroke-width="1" opacity="0.6"/>
+          <line x1="760" y1="266" x2="760" y2="300" stroke="#8A93A6" stroke-width="1" opacity="0.6"/>
+
+          <g font-family="JetBrains Mono" font-size="9" fill="#8A93A6" letter-spacing="2">
+            <text x="850" y="58" text-anchor="end">L1</text>
+            <text x="850" y="148" text-anchor="end" fill="#F5A623">L2 ★</text>
+            <text x="850" y="238" text-anchor="end" fill="#5DD3B7">L3</text>
+            <text x="850" y="328" text-anchor="end">L4</text>
+          </g>
+
+          <text x="40" y="22" fill="#E6E8EC" font-family="Space Grotesk" font-size="14" font-weight="600">DOG · 国赛联调四层结构</text>
+        </svg>
+      </div>
+
+      <!-- 真实协议 / 端口 / 话题 -->
+      <div class="arch-detail">
+        <div class="arch-detail__cell">
+          <div class="arch-detail__layer">感知</div>
+          <div class="arch-detail__title">Jetson 上的视觉栈</div>
+          <ul class="arch-detail__list">
+            <li><span>YOLO</span><span>Ultralytics YOLOv8n</span></li>
+            <li><span>仪表盘</span><span>OpenCV · gauge_reader</span></li>
+            <li><span>锥桶检测</span><span>cone_detector_yolo</span></li>
+            <li><span>放置区</span><span>模板匹配 · fixed_detector</span></li>
+          </ul>
+        </div>
+        <div class="arch-detail__cell">
+          <div class="arch-detail__layer">通信</div>
+          <div class="arch-detail__title">ROS2 + UDP + TCP</div>
+          <ul class="arch-detail__list">
+            <li><span>ROS2</span><span>rclpy · std_msgs/String</span></li>
+            <li><span>UDP 5005</span><span>JSON 命令入狗端</span></li>
+            <li><span>Lite2 SDK</span><span>192.168.1.120:43893</span></li>
+            <li><span>TCP 9800</span><span>vision_server JSON</span></li>
+          </ul>
+        </div>
+        <div class="arch-detail__cell">
+          <div class="arch-detail__layer">执行</div>
+          <div class="arch-detail__title">Lite2 + JetArm</div>
+          <ul class="arch-detail__list">
+            <li><span>Lite2</span><span>lite2_motion_receiver · watchdog</span></li>
+            <li><span>JetArm</span><span>ros_robot_controller SDK</span></li>
+            <li><span>SLAM</span><span>ORB-SLAM3 · colcon_ws</span></li>
+            <li><span>调试</span><span>HTTP 8080 JPEG 推流</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 03 核心模块与实现 ========== -->
+    <section class="section" id="algo">
+      <header class="section__header">
+        <span class="section__index">03</span>
+        <h2 class="section__title">核心模块与实现</h2>
+        <p class="section__sub">以下代码片段均来自项目仓库真实文件,只做了排版。</p>
+      </header>
+
+      <!-- ========== 3.1 巡检识别 ========== -->
+      <article class="algo-card">
+        <header class="algo-card__head">
+          <span class="algo-card__index">3.1 · MODULE</span>
+          <h3 class="algo-card__title">Live Inspection (YOLOv8 + OpenCV)</h3>
+          <span class="algo-card__cn">实时巡检识别</span>
+        </header>
+
+        <div class="algo-card__meta">
+          <span class="algo-card__meta-item">FILE <strong>live_detect_yolo_opencv.py</strong></span>
+          <span class="algo-card__meta-item">MODEL <strong>best.pt (YOLOv8n)</strong></span>
+          <span class="algo-card__meta-item">CLASSES <strong>7</strong></span>
+          <span class="algo-card__meta-item">RUNS <strong>CPU/GPU · Jetson</strong></span>
+        </div>
+
+        <div class="algo-card__body">
+          <div class="algo-card__problem">
+            <div class="algo-card__problem-block">
+              <div class="algo-card__label">任务</div>
+              <p class="algo-card__text">
+                主线脚本 <code>live_detect_yolo_opencv.py</code> 同时做两件事:
+                用 YOLOv8 自训权重(<code>best.pt</code>,5 类: zone_A/B/C/D + gauge)
+                定位画面中的巡检区,
+                裁出仪表盘 ROI 后调用 <code>gauge_reader.read_gauge()</code> 读指针角度,
+                输出 <code>low / normal / high / unknown</code>。
+              </p>
+            </div>
+            <div class="algo-card__problem-block">
+              <div class="algo-card__label">真实配置</div>
+              <p class="algo-card__text">
+                <code>CONF_THRES=0.25</code>、<code>IMG_SIZE=416</code>、
+                <code>CAMERA_WIDTH=640</code> / <code>480</code>、
+                <code>CAMERA_FPS=30</code>、
+                <code>STATUS_HISTORY_SIZE=7</code>、
+                <code>STATUS_STABLE_MIN_COUNT=4</code>、
+                <code>UNKNOWN_RESET_COUNT=5</code>。
+              </p>
+            </div>
+          </div>
+
+          <div class="algo-card__approach">
+            <div class="algo-card__label">真实代码片段</div>
+
+            <div class="code-block">
+              <div class="code-block__head">
+                <span class="code-block__file">live_detect_yolo_opencv.py · 识别循环</span>
+                <span class="code-block__lang">Python</span>
+              </div>
+<pre><code><span class="tk-key">import</span> cv2
+<span class="tk-key">from</span> ultralytics <span class="tk-key">import</span> YOLO
+<span class="tk-key">from</span> gauge_reader <span class="tk-key">import</span> read_gauge
+
+<span class="tk-var">model</span> = <span class="tk-cls">YOLO</span>(<span class="tk-str">"/home/jetson/yolo_deploy/best.pt"</span>)
+<span class="tk-var">status_history</span> = <span class="tk-cls">deque</span>(<span class="tk-var">maxlen</span>=<span class="tk-num">7</span>)
+<span class="tk-var">unknown_streak</span> = <span class="tk-num">0</span>
+
+<span class="tk-key">while</span> <span class="tk-key">True</span>:
+    <span class="tk-var">frame</span> = <span class="tk-fn">read_camera</span>(<span class="tk-num">4</span>, <span class="tk-var">w</span>=<span class="tk-num">640</span>, <span class="tk-var">h</span>=<span class="tk-num">480</span>)
+    <span class="tk-var">dets</span> = <span class="tk-var">model</span>(<span class="tk-var">frame</span>, <span class="tk-var">imgsz</span>=<span class="tk-num">416</span>, <span class="tk-var">conf</span>=<span class="tk-num">0.25</span>)[<span class="tk-num">0</span>]
+
+    <span class="tk-key">for</span> <span class="tk-var">box</span> <span class="tk-key">in</span> <span class="tk-var">dets</span>.boxes:
+        <span class="tk-key">if</span> <span class="tk-var">box</span>.cls <span class="tk-key">in</span> <span class="tk-var">ZONE_CLASSES</span>:
+            <span class="tk-var">zone</span> = <span class="tk-cls">CLASS_NAMES</span>[<span class="tk-var">box</span>.cls]   <span class="tk-cm"># zone_A/B/C/D</span>
+        <span class="tk-key">elif</span> <span class="tk-var">box</span>.cls == <span class="tk-num">4</span>:                  <span class="tk-cm"># gauge</span>
+            <span class="tk-var">roi</span> = <span class="tk-fn">crop</span>(<span class="tk-var">frame</span>, <span class="tk-var">box</span>)
+            <span class="tk-var">status</span> = <span class="tk-fn">read_gauge</span>(<span class="tk-var">roi</span>)      <span class="tk-cm"># low/normal/high</span>
+
+    <span class="tk-cm"># 7 帧滑动窗口, ≥4 帧一致才算稳定</span>
+    <span class="tk-var">status_history</span>.<span class="tk-fn">append</span>(<span class="tk-var">status</span>)
+    <span class="tk-key">if</span> <span class="tk-var">status</span> == <span class="tk-str">"unknown"</span>:
+        <span class="tk-var">unknown_streak</span> += <span class="tk-num">1</span>
+        <span class="tk-key">if</span> <span class="tk-var">unknown_streak</span> &gt;= <span class="tk-num">5</span>: <span class="tk-var">status_history</span>.<span class="tk-fn">clear</span>()
+    <span class="tk-key">elif</span> <span class="tk-cls">Counter</span>(<span class="tk-var">status_history</span>)[<span class="tk-var">status</span>] &gt;= <span class="tk-num">4</span>:
+        <span class="tk-fn">publish_inspection</span>(<span class="tk-var">zone</span>, <span class="tk-var">status</span>)</code></pre>
+            </div>
+
+            <div class="algo-card__label" style="margin-top:18px">数据集与训练</div>
+            <p class="algo-card__text">
+              训练数据放 <code>data/inspection_yolo/</code>,
+              配置 <code>dataset.yaml</code> 7 类:
+              <code>zone_A / zone_B / zone_C / zone_D / gauge_low / gauge_normal / gauge_high</code>。
+              训练:<code>yolo detect train model=yolov8n.pt data=... imgsz=640 epochs=80 batch=16</code>。
+            </p>
+          </div>
+        </div>
+      </article>
+
+      <!-- ========== 3.2 状态冻结与桥接 ========== -->
+      <article class="algo-card">
+        <header class="algo-card__head">
+          <span class="algo-card__index">3.2 · MODULE</span>
+          <h3 class="algo-card__title">InspectionFreezer + IntegrationBridge</h3>
+          <span class="algo-card__cn">状态冻结 + ROS2 转发</span>
+        </header>
+
+        <div class="algo-card__meta">
+          <span class="algo-card__meta-item">FILE <strong>integration_bridge/</strong></span>
+          <span class="algo-card__meta-item">ROS2 <strong>Humble · rclpy</strong></span>
+          <span class="algo-card__meta-item">MSG <strong>std_msgs/String</strong></span>
+          <span class="algo-card__meta-item">CLI <strong>--no-ros 模式</strong></span>
+        </div>
+
+        <div class="algo-card__body">
+          <div class="algo-card__problem">
+            <div class="algo-card__problem-block">
+              <div class="algo-card__label">为什么需要</div>
+              <p class="algo-card__text">
+                <code>live_detect_yolo_opencv.py</code> 会持续发布<strong>单帧</strong>结果。
+                如果直接转发,机械臂会在"A 还是 abnormal、C 还是 unknown"
+                的时候就被触发抓红条——这是现场最容易翻车的点。
+              </p>
+            </div>
+            <div class="algo-card__problem-block">
+              <div class="algo-card__label">冻结规则</div>
+              <p class="algo-card__text">
+                <code>InspectionFreezer</code>(默认 <code>stable_count=3</code>)
+                要求每个区连续出现 3 次<strong>同样的</strong>状态才冻结。
+                全部 4 个区都冻结后,才向 <code>/inspection/all</code> 发布
+                最终字符串 <code>A:abnormal,B:normal,...</code>。
+              </p>
+            </div>
+          </div>
+
+          <div class="algo-card__approach">
+            <div class="algo-card__label">真实代码</div>
+
+            <div class="code-block">
+              <div class="code-block__head">
+                <span class="code-block__file">inspection_freezer.py</span>
+                <span class="code-block__lang">Python</span>
+              </div>
+<pre><code><span class="tk-key">class</span> <span class="tk-cls">InspectionFreezer</span>:
+    <span class="tk-key">def</span> <span class="tk-fn">__init__</span>(<span class="tk-self">self</span>, <span class="tk-var">stable_count</span>=<span class="tk-num">3</span>):
+        <span class="tk-self">self</span>.stable_count = <span class="tk-fn">max</span>(<span class="tk-num">1</span>, <span class="tk-fn">int</span>(<span class="tk-var">stable_count</span>))
+        <span class="tk-self">self</span>._candidates = {}   <span class="tk-cm"># zone -> ZoneCandidate</span>
+        <span class="tk-self">self</span>._frozen    = {}   <span class="tk-cm"># zone -> InspectionResult</span>
+
+    <span class="tk-key">def</span> <span class="tk-fn">update</span>(<span class="tk-self">self</span>, <span class="tk-var">result</span>) -&gt; <span class="tk-cls">bool</span>:
+        <span class="tk-key">if</span> <span class="tk-var">result</span>.zone <span class="tk-key">in</span> <span class="tk-self">self</span>._frozen: <span class="tk-key">return</span> <span class="tk-key">False</span>
+        <span class="tk-key">if</span> <span class="tk-var">result</span>.zone_state == <span class="tk-str">"unknown"</span>: <span class="tk-key">return</span> <span class="tk-key">False</span>
+
+        <span class="tk-var">key</span> = <span class="tk-self">self</span>.<span class="tk-fn">_key</span>(<span class="tk-var">result</span>)
+        <span class="tk-var">cand</span> = <span class="tk-self">self</span>._candidates.<span class="tk-fn">get</span>(<span class="tk-var">result</span>.zone)
+        <span class="tk-key">if</span> <span class="tk-var">cand</span> <span class="tk-key">is</span> <span class="tk-key">None</span> <span class="tk-key">or</span> <span class="tk-self">self</span>.<span class="tk-fn">_key</span>(<span class="tk-var">cand</span>.result) != <span class="tk-var">key</span>:
+            <span class="tk-self">self</span>._candidates[<span class="tk-var">result</span>.zone] = <span class="tk-cls">ZoneCandidate</span>(<span class="tk-var">result</span>)
+            <span class="tk-key">return</span> <span class="tk-key">False</span>
+
+        <span class="tk-var">cand</span>.count += <span class="tk-num">1</span>
+        <span class="tk-key">if</span> <span class="tk-var">cand</span>.count &gt;= <span class="tk-self">self</span>.stable_count:
+            <span class="tk-self">self</span>._frozen[<span class="tk-var">result</span>.zone] = <span class="tk-var">result</span>
+            <span class="tk-key">return</span> <span class="tk-key">True</span>      <span class="tk-cm"># 本次冻结</span>
+        <span class="tk-key">return</span> <span class="tk-key">False</span></code></pre>
+            </div>
+
+            <div class="algo-card__label" style="margin-top:18px">桥接节点关键逻辑</div>
+            <p class="algo-card__text">
+              <code>bridge_node.py</code> 订阅 <code>/bridge/inspection_result</code>
+              和 <code>/bridge/placement_zone</code>,
+              经过冻结或直接转发,
+              发布 <code>/inspection/all</code> 和 <code>/placement/recognized_zone</code>。
+              同时通过 <code>/inspection/reset</code>(<code>std_msgs/Bool</code>)
+              支持现场一键重置。
+            </p>
+
+            <div class="code-block">
+              <div class="code-block__head">
+                <span class="code-block__file">bridge_node.py · 订阅与发布</span>
+                <span class="code-block__lang">Python</span>
+              </div>
+<pre><code><span class="tk-key">class</span> <span class="tk-cls">IntegrationBridgeNode</span>(<span class="tk-cls">Node</span>):
+    <span class="tk-key">def</span> <span class="tk-fn">__init__</span>(<span class="tk-self">self</span>):
+        <span class="tk-fn">super</span>().<span class="tk-fn">__init__</span>(<span class="tk-str">"integration_bridge_node"</span>)
+        <span class="tk-self">self</span>.freezer = <span class="tk-cls">InspectionFreezer</span>(<span class="tk-var">stable_count</span>=<span class="tk-num">3</span>)
+        <span class="tk-self">self</span>.<span class="tk-fn">create_subscription</span>(<span class="tk-cls">String</span>, <span class="tk-str">"/bridge/inspection_result"</span>, <span class="tk-self">self</span>._on_inspection)
+        <span class="tk-self">self</span>.<span class="tk-fn">create_subscription</span>(<span class="tk-cls">String</span>, <span class="tk-str">"/bridge/placement_zone"</span>,    <span class="tk-self">self</span>._on_placement)
+        <span class="tk-self">self</span>.<span class="tk-fn">create_subscription</span>(<span class="tk-cls">Bool</span>,   <span class="tk-str">"/inspection/reset"</span>,          <span class="tk-self">self</span>._on_reset)
+        <span class="tk-self">self</span>.<span class="tk-fn">create_publisher</span>(<span class="tk-cls">String</span>, <span class="tk-str">"/inspection/all"</span>, <span class="tk-num">10</span>)
+        <span class="tk-self">self</span>.<span class="tk-fn">create_publisher</span>(<span class="tk-cls">String</span>, <span class="tk-str">"/placement/recognized_zone"</span>, <span class="tk-num">10</span>)
+        <span class="tk-self">self</span>.<span class="tk-fn">create_publisher</span>(<span class="tk-cls">String</span>, <span class="tk-str">"/competition/state"</span>, <span class="tk-num">10</span>)
+
+    <span class="tk-key">def</span> <span class="tk-fn">_on_inspection</span>(<span class="tk-self">self</span>, <span class="tk-var">msg</span>):
+        <span class="tk-key">for</span> <span class="tk-var">r</span> <span class="tk-key">in</span> <span class="tk-fn">inspections_from_payload</span>(<span class="tk-var">msg</span>.data):
+            <span class="tk-key">if</span> <span class="tk-self">self</span>.freezer.<span class="tk-fn">update</span>(<span class="tk-var">r</span>):
+                <span class="tk-self">self</span>.<span class="tk-fn">get_logger</span>().<span class="tk-fn">info</span>(<span class="tk-str">f"zone frozen: {r.zone}:{r.zone_state}"</span>)
+        <span class="tk-key">if</span> <span class="tk-self">self</span>.freezer.<span class="tk-fn">is_complete</span>() <span class="tk-key">and</span> <span class="tk-key">not</span> <span class="tk-self">self</span>.frozen_text:
+            <span class="tk-self">self</span>.frozen_text = <span class="tk-self">self</span>.freezer.<span class="tk-fn">frozen_text</span>()
+            <span class="tk-self">self</span>.pub_inspection_all.<span class="tk-fn">publish</span>(<span class="tk-cls">String</span>(<span class="tk-var">data</span>=<span class="tk-self">self</span>.frozen_text))</code></pre>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ========== 3.3 锥桶避障 ========== -->
+      <article class="algo-card">
+        <header class="algo-card__head">
+          <span class="algo-card__index">3.3 · MODULE</span>
+          <h3 class="algo-card__title">Cone Avoidance (YOLO + Rule)</h3>
+          <span class="algo-card__cn">锥桶检测 + 规则避障</span>
+        </header>
+
+        <div class="algo-card__meta">
+          <span class="algo-card__meta-item">FILE <strong>obstacle_avoidance/</strong></span>
+          <span class="algo-card__meta-item">DETECT <strong>cone_detector_yolo</strong></span>
+          <span class="algo-card__meta-item">STRATEGY <strong>cone_strategy.py</strong></span>
+          <span class="algo-card__meta-item">OUTPUT <strong>UDP 5005 JSON</strong></span>
+        </div>
+
+        <div class="algo-card__body">
+          <div class="algo-card__problem">
+            <div class="algo-card__problem-block">
+              <div class="algo-card__label">职责拆分</div>
+              <p class="algo-card__text">
+                <strong>YOLO 只做检测</strong>——只输出 <code>cone</code> 的 xyxy 框。
+                <strong>规则策略做决策</strong>——
+                <code>cone_strategy.py</code> 根据框中心横坐标与框面积,
+                生成一个保守的 <code>vx / vy / wz</code>。
+                这样的好处是可以脱离相机和机器人,做单元测试。
+              </p>
+            </div>
+            <div class="algo-card__problem-block">
+              <div class="algo-card__label">真实策略参数</div>
+              <p class="algo-card__text">
+                三档前进速度:<code>forward 0.16 / slow 0.08 / crawl 0.05</code>。
+                三档转向:<code>corridor 0.22 / avoid 0.28 / emergency 0.38</code>。
+                阈值:<code>min_confidence 0.35</code>、
+                <code>near_area_ratio 0.08</code>、
+                <code>stop_area_ratio 0.20</code>。
+              </p>
+            </div>
+          </div>
+
+          <div class="algo-card__approach">
+            <div class="algo-card__label">真实代码</div>
+
+            <div class="code-block">
+              <div class="code-block__head">
+                <span class="code-block__file">cone_strategy.py · 配置与判定</span>
+                <span class="code-block__lang">Python</span>
+              </div>
+<pre><code><span class="tk-key">from</span> dataclasses <span class="tk-key">import</span> dataclass
+
+<span class="tk-key">@dataclass</span>(<span class="tk-var">frozen</span>=<span class="tk-key">True</span>)
+<span class="tk-key">class</span> <span class="tk-cls">ConeDetection</span>:
+    xyxy:        <span class="tk-cls">Box</span>            <span class="tk-cm"># (x1, y1, x2, y2)</span>
+    confidence:  <span class="tk-cls">float</span> = <span class="tk-num">1.0</span>
+    class_name:  <span class="tk-cls">str</span>   = <span class="tk-str">"cone"</span>
+
+    <span class="tk-key">@property</span>
+    <span class="tk-key">def</span> <span class="tk-fn">center_x</span>(<span class="tk-self">self</span>) -&gt; <span class="tk-cls">float</span>: <span class="tk-key">return</span> (<span class="tk-self">self</span>.xyxy[<span class="tk-num">0</span>] + <span class="tk-self">self</span>.xyxy[<span class="tk-num">2</span>]) * <span class="tk-num">0.5</span>
+    <span class="tk-key">@property</span>
+    <span class="tk-key">def</span> <span class="tk-fn">area</span>(<span class="tk-self">self</span>) -&gt; <span class="tk-cls">float</span>:
+        <span class="tk-var">x1</span>,<span class="tk-var">y1</span>,<span class="tk-var">x2</span>,<span class="tk-var">y2</span> = <span class="tk-self">self</span>.xyxy
+        <span class="tk-key">return</span> <span class="tk-fn">max</span>(<span class="tk-num">0.0</span>, <span class="tk-var">x2</span>-<span class="tk-var">x1</span>) * <span class="tk-fn">max</span>(<span class="tk-num">0.0</span>, <span class="tk-var">y2</span>-<span class="tk-var">y1</span>)
+
+<span class="tk-key">@dataclass</span>(<span class="tk-var">frozen</span>=<span class="tk-key">True</span>)
+<span class="tk-key">class</span> <span class="tk-cls">AvoidanceConfig</span>:
+    min_confidence:            <span class="tk-cls">float</span> = <span class="tk-num">0.35</span>
+    near_area_ratio:           <span class="tk-cls">float</span> = <span class="tk-num">0.08</span>
+    stop_area_ratio:           <span class="tk-cls">float</span> = <span class="tk-num">0.20</span>
+    forward_speed:             <span class="tk-cls">float</span> = <span class="tk-num">0.16</span>
+    slow_speed:                <span class="tk-cls">float</span> = <span class="tk-num">0.08</span>
+    crawl_speed:               <span class="tk-cls">float</span> = <span class="tk-num">0.05</span>
+    avoid_turn_speed:          <span class="tk-cls">float</span> = <span class="tk-num">0.28</span>
+    emergency_turn_speed:      <span class="tk-cls">float</span> = <span class="tk-num">0.38</span>
+    max_corridor_turn_speed:   <span class="tk-cls">float</span> = <span class="tk-num">0.22</span>
+    gap_center_deadband_ratio: <span class="tk-cls">float</span> = <span class="tk-num">0.06</span></code></pre>
+            </div>
+
+            <div class="code-block">
+              <div class="code-block__head">
+                <span class="code-block__file">obstacle_zone_runner.py · 启动</span>
+                <span class="code-block__lang">Bash</span>
+              </div>
+<pre><code><span class="tk-cm"># 干跑调试(不连相机,不连机器人)</span>
+python3 -m obstacle_avoidance.obstacle_zone_runner \
+  --model /home/jetson/yolo_deploy/cone_best.pt \
+  --camera /dev/video0 \
+  --dry-run
+
+<span class="tk-cm"># 正式接入狗端 (UDP 5005 → Lite2 motion receiver)</span>
+python3 -m obstacle_avoidance.obstacle_zone_runner \
+  --model /home/jetson/yolo_deploy/cone_best.pt \
+  --camera /dev/video4 \
+  --udp-host 127.0.0.1 \
+  --udp-port 5005</code></pre>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- ========== 3.4 机械臂任务管理 ========== -->
+      <article class="algo-card">
+        <header class="algo-card__head">
+          <span class="algo-card__index">3.4 · MODULE</span>
+          <h3 class="algo-card__title">JetArm Task Manager</h3>
+          <span class="algo-card__cn">机械臂任务状态机</span>
+        </header>
+
+        <div class="algo-card__meta">
+          <span class="algo-card__meta-item">FILE <strong>arm_grasp/</strong></span>
+          <span class="algo-card__meta-item">HARDWARE <strong>JetArm</strong></span>
+          <span class="algo-card__meta-item">SDK <strong>ros_robot_controller</strong></span>
+          <span class="algo-card__meta-item">BUILD <strong>colcon</strong></span>
+        </div>
+
+        <div class="algo-card__body">
+          <div class="algo-card__problem">
+            <div class="algo-card__problem-block">
+              <div class="algo-card__label">核心设计</div>
+              <p class="algo-card__text">
+                流程:<em>抓红条 → 保持夹紧 → 走到放置区 → 识别目标字母 → 松爪</em>。
+                关键点:<strong>不能按时间松手</strong>,只有
+                <code>/placement/recognized_zone</code> 与本次异常区匹配上,
+                才通过 <code>/arm/command</code> 让机械臂松爪。
+              </p>
+            </div>
+            <div class="algo-card__problem-block">
+              <div class="algo-card__label">协同节点</div>
+              <p class="algo-card__text">
+                <code>inspection_memory_node.py</code> 订阅 <code>/inspection/all</code>,
+                记下异常区域列表并发布 <code>/inspection/target_zones</code>。
+                <code>tools/inspection_pick_place_coordinator.py</code>
+                等到 <code>/mission/event</code> = <code>pick_area_arrived</code> 后,
+                再触发 <code>/task/start</code> 让机械臂开始抓红条。
+              </p>
+            </div>
+          </div>
+
+          <div class="algo-card__approach">
+            <div class="algo-card__label">真实启动流程</div>
+
+            <div class="code-block">
+              <div class="code-block__head">
+                <span class="code-block__file">终端 3 · 机械臂启动</span>
+                <span class="code-block__lang">Bash</span>
+              </div>
+<pre><code><span class="tk-cm"># 机械臂任务管理(完整比赛阶段:巡检只记录,到抓取区才开抓)</span>
+ros2 launch arm_grasp jetarm_grasp.launch.py auto_start_on_targets:=false
+
+<span class="tk-cm"># 协调程序:订阅冻结结果,到抓取区触发 start</span>
+python3 tools/inspection_pick_place_coordinator.py
+
+<span class="tk-cm"># 现场手动确认机器人已到达抓取区后,再发布</span>
+ros2 topic pub --once /mission/event std_msgs/msg/String "data: 'pick_area_arrived'"
+
+<span class="tk-cm"># 手动模拟识别到 A 放置区(用于离线联调)</span>
+ros2 topic pub --once /bridge/placement_zone std_msgs/msg/String "data: 'A'"</code></pre>
+            </div>
+
+            <div class="code-block">
+              <div class="code-block__head">
+                <span class="code-block__file">Lite2 motion receiver · JSON 命令格式</span>
+                <span class="code-block__lang">JSON</span>
+              </div>
+<pre><code><span class="tk-cm">// lite2_motion_receiver.py 接受的几种命令格式</span>
+{ <span class="tk-key">"action"</span>: <span class="tk-str">"forward"</span>, <span class="tk-key">"speed"</span>: <span class="tk-num">12000</span>, <span class="tk-key">"duration"</span>: <span class="tk-num">0.5</span> }
+{ <span class="tk-key">"cmd"</span>:    <span class="tk-str">"turn_left"</span>, <span class="tk-key">"speed"</span>: <span class="tk-num">8000</span> }
+{ <span class="tk-key">"vx"</span>: <span class="tk-num">0.2</span>, <span class="tk-key">"vy"</span>: <span class="tk-num">0.0</span>, <span class="tk-key">"wz"</span>: <span class="tk-op">-</span><span class="tk-num">0.3</span> }
+{ <span class="tk-key">"linear"</span>:  { <span class="tk-key">"x"</span>: <span class="tk-num">0.2</span>, <span class="tk-key">"y"</span>: <span class="tk-num">0.0</span> },
+  <span class="tk-key">"angular"</span>: { <span class="tk-key">"z"</span>: <span class="tk-op">-</span><span class="tk-num">0.3</span> } }</code></pre>
+            </div>
+
+            <div class="algo-card__label" style="margin-top:18px">SDK 命令字</div>
+            <p class="algo-card__text">
+              <code>lite2_motion_receiver.py</code> 内置 Lite2 原生命令字常量,
+              例如 <code>CMD_FORWARD_BACK=0x21010130</code>、
+              <code>CMD_TURN=0x21010135</code>、
+              <code>CMD_WALK_GAIT=0x21010300</code>、
+              <code>CMD_HEARTBEAT=0x21040001</code>,
+              由后台心跳线程周期性下发,默认目标 <code>192.168.1.120:43893</code>。
+            </p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ========== 04 关键技术突破 ========== -->
+    <section class="section section--alt" id="breakthrough">
+      <header class="section__header">
+        <span class="section__index">04</span>
+        <h2 class="section__title">工程上的几个关键决策</h2>
+        <p class="section__sub">这些是我们做过的选择,以及为什么这么选。</p>
+      </header>
+
+      <div class="breakthrough-list">
+
+        <article class="breakthrough">
+          <div class="breakthrough__idx">B1</div>
+          <div class="breakthrough__body">
+            <h3 class="breakthrough__title">所有感知/决策下沉到 Jetson</h3>
+            <p class="breakthrough__desc">
+              Lite2 狗端不跑 YOLO、不跑 OpenCV 读表、不跑 ORB-SLAM3、不跑 ROS2 状态机。
+              狗端只接 <code>vx/vy/wz</code> 或 Lite2 原生命令,并保留 watchdog。
+              原因:狗端算力不够且容易掉链,关键路径上任何一帧卡顿都会让
+              比赛直接失分。
+            </p>
+            <div class="breakthrough__chips">
+              <span class="breakthrough__chip">Jetson Xavier NX</span>
+              <span class="breakthrough__chip">UDP 5005</span>
+              <span class="breakthrough__chip">Lite2 watchdog</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="breakthrough">
+          <div class="breakthrough__idx">B2</div>
+          <div class="breakthrough__body">
+            <h3 class="breakthrough__title">状态冻结:连续 N 帧才认定</h3>
+            <p class="breakthrough__desc">
+              <code>InspectionFreezer(stable_count=3)</code> 要求每个区
+              连续 3 次同样的结果才冻结。全部 4 个区冻结后,
+              才向 <code>/inspection/all</code> 发布最终字符串,
+              机械臂才允许开始抓红条。
+              这一个机制杜绝了"画面刚闪过一帧 A:abnormal 就误触抓取"的问题。
+            </p>
+            <div class="breakthrough__chips">
+              <span class="breakthrough__chip">N = <strong>3</strong></span>
+              <span class="breakthrough__chip">四区全部冻结</span>
+              <span class="breakthrough__chip">/inspection/reset 重置</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="breakthrough">
+          <div class="breakthrough__idx">B3</div>
+          <div class="breakthrough__body">
+            <h3 class="breakthrough__title">机械臂"保持夹紧",不按时间松爪</h3>
+            <p class="breakthrough__desc">
+              <code>task_manager_node.py</code> 只在
+              <code>/placement/recognized_zone</code> 与本次异常区匹配时,
+              才会发出松爪命令。这样机器人可以从容走到任意一个
+              字母纸箱前再决定放哪里,而不是固定几秒后被迫松手。
+            </p>
+            <div class="breakthrough__chips">
+              <span class="breakthrough__chip">无定时器</span>
+              <span class="breakthrough__chip">/placement 触发</span>
+              <span class="breakthrough__chip">匹配才松爪</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="breakthrough">
+          <div class="breakthrough__idx">B4</div>
+          <div class="breakthrough__body">
+            <h3 class="breakthrough__title">--no-ros / --dry-run / HTTP 推流调试体系</h3>
+            <p class="breakthrough__desc">
+              <code>bridge_node.py --no-ros</code> 可以脱离 ROS2 环境跑格式验证;
+              <code>obstacle_zone_runner --dry-run</code> 不连相机也能测策略;
+              <code>live_detect_yolo_opencv.py</code> 同时启动 <strong>HTTP 8080</strong> JPEG 推流,
+              现场笔记本用浏览器就能看到实时画面。
+              这套"无机器人也能调试"的链路是赛前最大的节省。
+            </p>
+            <div class="breakthrough__chips">
+              <span class="breakthrough__chip"><strong>--no-ros</strong> 验证</span>
+              <span class="breakthrough__chip"><strong>--dry-run</strong> 策略</span>
+              <span class="breakthrough__chip">HTTP <strong>8080</strong> 推流</span>
+            </div>
+          </div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ========== 05 实测参数与通信清单 ========== -->
+    <section class="section" id="bench">
+      <header class="section__header">
+        <span class="section__index">05</span>
+        <h2 class="section__title">实测参数与通信清单</h2>
+        <p class="section__sub">所有数字直接来自代码配置和启动脚本。</p>
+      </header>
+
+      <table class="bench-table">
+        <thead>
+          <tr>
+            <th style="width:32%">参数 / 通道</th>
+            <th class="is-ours" style="width:68%">项目内实际取值</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>YOLO 模型</td>
+            <td class="is-ours"><code>ultralytics.YOLO('best.pt')</code> · 7 类 · <code>imgsz=416</code> · <code>conf=0.25</code></td>
+          </tr>
+          <tr>
+            <td>相机</td>
+            <td class="is-ours"><code>/dev/video4</code> · 640×480 @ 30 FPS · <code>cv2.VideoCapture</code></td>
+          </tr>
+          <tr>
+            <td>巡检状态稳定</td>
+            <td class="is-ours"><code>STATUS_HISTORY_SIZE=7</code> · <code>STABLE_MIN_COUNT=4</code> · <code>UNKNOWN_RESET_COUNT=5</code></td>
+          </tr>
+          <tr>
+            <td>状态冻结</td>
+            <td class="is-ours"><code>InspectionFreezer(stable_count=3)</code> · <code>frozen_publish_interval=1.0s</code></td>
+          </tr>
+          <tr>
+            <td>锥桶策略速度</td>
+            <td class="is-ours">forward <strong>0.16</strong> · slow <strong>0.08</strong> · crawl <strong>0.05</strong> · 急转 <strong>0.38</strong></td>
+          </tr>
+          <tr>
+            <td>Lite2 命令</td>
+            <td class="is-ours">UDP <code>0.0.0.0:5005</code> JSON → <code>192.168.1.120:43893</code> · 心跳 <code>CMD_HEARTBEAT=0x21040001</code></td>
+          </tr>
+          <tr>
+            <td>Vision Server</td>
+            <td class="is-ours">TCP JSON 服务 <code>0.0.0.0:9800</code> · 请求: <code>detect_zone_letters / detect_gauges / poll_inspection</code></td>
+          </tr>
+          <tr>
+            <td>HTTP 推流</td>
+            <td class="is-ours"><code>STREAM_PORT=8080</code> · JPEG quality 70 · 浏览器直连看实时画面</td>
+          </tr>
+          <tr>
+            <td>音频播报</td>
+            <td class="is-ours"><code>AudioFileSpeaker.play(key)</code> → <code>output/audio/A_low.wav</code> 等</td>
+          </tr>
+          <tr>
+            <td>ORB-SLAM3</td>
+            <td class="is-ours">独立 <code>colcon_ws</code> · 话题 <code>/camera_pose</code> · <code>goal_controller</code> 目标点导航</td>
+          </tr>
+          <tr>
+            <td>测试</td>
+            <td class="is-ours"><code>pytest -q</code> · <code>tests/unit/test_fixed_detector.py</code> · <code>tools/test_*.py</code></td>
+          </tr>
+          <tr>
+            <td>构建</td>
+            <td class="is-ours"><code>colcon build</code> · <code>ros2 launch arm_grasp jetarm_grasp.launch.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ========== 06 技术栈 ========== -->
+    <section class="section section--alt" id="stack">
+      <header class="section__header">
+        <span class="section__index">06</span>
+        <h2 class="section__title">技术栈</h2>
+        <p class="section__sub">每项都是项目仓库里 <code>requirements.txt</code> / <code>package.xml</code> 实际声明的。</p>
+      </header>
+
+      <div class="stack-grid">
+        <article class="stack-group">
+          <div class="stack-group__label">A · 视觉</div>
+          <div class="stack-tags">
+            <span class="stack-tag"><strong>OpenCV</strong> · ROI / 仪表盘</span>
+            <span class="stack-tag"><strong>Ultralytics</strong> · YOLOv8n 推理</span>
+            <span class="stack-tag"><strong>PyTorch</strong> · 训练后端</span>
+            <span class="stack-tag"><strong>NumPy</strong></span>
+          </div>
+        </article>
+
+        <article class="stack-group">
+          <div class="stack-group__label">B · ROS2 与通信</div>
+          <div class="stack-tags">
+            <span class="stack-tag"><strong>ROS2 Humble</strong> · rclpy</span>
+            <span class="stack-tag"><strong>std_msgs/String</strong> · 转发</span>
+            <span class="stack-tag"><strong>UDP socket</strong> · 5005</span>
+            <span class="stack-tag"><strong>TCP JSON</strong> · 9800</span>
+          </div>
+        </article>
+
+        <article class="stack-group">
+          <div class="stack-group__label">C · 硬件 SDK</div>
+          <div class="stack-tags">
+            <span class="stack-tag"><strong>Lite2</strong> · motion_receiver</span>
+            <span class="stack-tag"><strong>JetArm</strong> · ros_robot_controller</span>
+            <span class="stack-tag"><strong>Jetson Xavier NX</strong></span>
+            <span class="stack-tag"><strong>/dev/video4</strong> · 相机</span>
+          </div>
+        </article>
+
+        <article class="stack-group">
+          <div class="stack-group__label">D · 定位与控制</div>
+          <div class="stack-tags">
+            <span class="stack-tag"><strong>ORB-SLAM3</strong> · colcon_ws</span>
+            <span class="stack-tag"><strong>goal_controller</strong> · 目标点</span>
+            <span class="stack-tag"><strong>UDP vx/vy/wz</strong> · 速度指令</span>
+            <span class="stack-tag"><strong>watchdog</strong> · 超时停机</span>
+          </div>
+        </article>
+
+        <article class="stack-group">
+          <div class="stack-group__label">E · 调试与可视化</div>
+          <div class="stack-tags">
+            <span class="stack-tag"><strong>HTTP 8080</strong> · JPEG 推流</span>
+            <span class="stack-tag"><strong>OpenCV window</strong> · ROI 调试</span>
+            <span class="stack-tag"><strong>jsonl event log</strong></span>
+            <span class="stack-tag"><strong>espeak</strong> · 播报 fallback</span>
+          </div>
+        </article>
+
+        <article class="stack-group">
+          <div class="stack-group__label">F · 工程与测试</div>
+          <div class="stack-tags">
+            <span class="stack-tag"><strong>Python 3.8+</strong></span>
+            <span class="stack-tag"><strong>pytest</strong> · 单元测试</span>
+            <span class="stack-tag"><strong>colcon build</strong></span>
+            <span class="stack-tag"><strong>tools/</strong> · 离线 demo</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ========== FOOTER ========== -->
+    <footer class="footer">
+      <div class="footer__inner">
+        <div class="footer__col">
+          <div class="footer__logo">
+            DOG · <span class="footer__accent">国赛</span>
+          </div>
+          <p class="footer__tagline">
+            2026 中国高校智能机器人创意大赛(四足大型组)· 国赛联调方案。
+            代码、配置与启动命令全部来自项目仓库,没有外部虚构。
+          </p>
+        </div>
+
+        <div class="footer__meta">
+          <div class="footer__col">
+            <div class="footer__label">仓库</div>
+            <div class="footer__value">dog_repo/国赛</div>
+          </div>
+          <div class="footer__col">
+            <div class="footer__label">赛事</div>
+            <div class="footer__value">[比赛名称 / 赛道]</div>
+          </div>
+          <div class="footer__col">
+            <div class="footer__label">联系</div>
+            <div class="footer__value">[团队名 / 邮箱]</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer__bottom">
+        <div class="footer__status">
+          <span class="status-dot"></span>
+          <span>BUILD · integration · v1.0</span>
+        </div>
+        <div>© 2026 DOG · 国赛联调方案</div>
+      </div>
+    </footer>
+
+  </main>
+
+  <script src="scripts/main.js"></script>
+</body>
+</html>

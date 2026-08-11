@@ -51,8 +51,11 @@ class AvoidanceConfig:
     stop_area_ratio: float = 0.20
     forward_speed: float = 0.16
     slow_speed: float = 0.08
+    crawl_speed: float = 0.05
     avoid_turn_speed: float = 0.28
     emergency_turn_speed: float = 0.38
+    max_corridor_turn_speed: float = 0.22
+    gap_center_deadband_ratio: float = 0.06
 
 
 @dataclass(frozen=True)
@@ -102,23 +105,48 @@ def plan_cone_avoidance(
             vx=config.forward_speed,
             vy=0.0,
             wz=0.0,
-            state="clear",
-            reason="no cone detected",
+            state="clear_forward",
+            reason="no cone detected, continue through corridor",
         )
 
     nearest = max(valid, key=lambda item: item.area)
     nearest_area_ratio = nearest.area / frame_area
     center_left = frame_width * config.center_left_ratio
     center_right = frame_width * config.center_right_ratio
+    left_cones = [det for det in valid if det.center_x < frame_width * 0.5]
+    right_cones = [det for det in valid if det.center_x >= frame_width * 0.5]
+
+    if left_cones and right_cones:
+        left = max(left_cones, key=lambda item: item.area)
+        right = max(right_cones, key=lambda item: item.area)
+        gap_center = (left.center_x + right.center_x) * 0.5
+        offset_ratio = (gap_center - frame_width * 0.5) / max(frame_width * 0.5, 1.0)
+        if abs(offset_ratio) <= config.gap_center_deadband_ratio:
+            turn = 0.0
+        else:
+            turn = _clamp(
+                -offset_ratio * config.max_corridor_turn_speed,
+                -config.max_corridor_turn_speed,
+                config.max_corridor_turn_speed,
+            )
+        speed = config.slow_speed if nearest_area_ratio >= config.near_area_ratio else config.forward_speed
+        return MotionDecision(
+            vx=speed,
+            vy=0.0,
+            wz=turn,
+            state="gap_follow",
+            reason="two cones visible, steer through the gap",
+            target_box=nearest.xyxy,
+        )
 
     if nearest_area_ratio >= config.stop_area_ratio:
         turn = _free_side_turn(valid, frame_width, config.emergency_turn_speed)
         return MotionDecision(
-            vx=0.0,
+            vx=config.crawl_speed,
             vy=0.0,
             wz=turn,
-            state="too_close",
-            reason=f"largest cone area ratio {nearest_area_ratio:.3f}",
+            state="crawl_around",
+            reason=f"cone very close, crawl while turning away: area ratio {nearest_area_ratio:.3f}",
             target_box=nearest.xyxy,
         )
 
@@ -129,8 +157,8 @@ def plan_cone_avoidance(
             vx=config.slow_speed,
             vy=0.0,
             wz=turn,
-            state="avoid",
-            reason="center path blocked or cone is near",
+            state="avoid_forward",
+            reason="center path blocked or cone is near, keep moving forward",
             target_box=nearest.xyxy,
         )
 
@@ -165,6 +193,10 @@ def _free_side_turn(detections: List[ConeDetection], frame_width: float, turn_sp
     return turn_speed if left_weight <= right_weight else -turn_speed
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 def _normalize_frame_size(frame_size: Sequence[int]) -> Tuple[float, float]:
     if len(frame_size) >= 3:
         height = float(frame_size[0])
@@ -175,4 +207,3 @@ def _normalize_frame_size(frame_size: Sequence[int]) -> Tuple[float, float]:
         height = float(frame_size[1])
         return width, height
     raise ValueError("frame_size must be (width, height) or image.shape")
-

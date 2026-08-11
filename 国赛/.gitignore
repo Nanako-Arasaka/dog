@@ -1,9 +1,28 @@
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+
+# ===== Python 缓存 =====
 __pycache__/
 *.py[cod]
 .pytest_cache/
+*.egg-info/
+build/
+dist/
 
+# ===== 本地工作区记忆（不上传） =====
+.workbuddy/
+
+# ===== 运行时产物 =====
+debug/
 output/test_*/
 output/test_*.ppm
 output/debug_*/
 output/playback_log.jsonl
 output/arm_action_log.jsonl
+output/integration_bridge/
+output/*.jsonl
+output/test_speaker_pytest/
+
+# ===== 日志 =====
+*.log

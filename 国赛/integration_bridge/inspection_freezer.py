@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Tuple
 
-from .schemas import InspectionResult, ZONES, format_inspection_all
+from .schemas import InspectionResult, ZONES, format_inspection_all, format_inspection_all_detailed
 
 
 @dataclass
@@ -66,6 +66,14 @@ class InspectionFreezer:
 
     def frozen_text(self) -> str:
         return format_inspection_all(self._frozen.values())
+
+    def frozen_text_detailed(self) -> str:
+        """冻结结果（保留 low/high 区分），形如 'A:low,B:normal,C:high,D:normal'。
+
+        供 /inspection/all_detailed 发布、语音播报节点消费。
+        与 frozen_text() 共用同一份冻结数据，二者同时发布、同时更新。
+        """
+        return format_inspection_all_detailed(self._frozen.values())
 
     def progress_text(self) -> str:
         parts = []

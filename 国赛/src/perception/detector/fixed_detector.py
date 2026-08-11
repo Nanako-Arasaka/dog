@@ -260,9 +260,26 @@ def _detect_letters_from_frame(frame: VisionFrame, cfg: FixedDetectionConfig) ->
     cv2 = _try_cv2()
     if cv2 is not None:
         candidates = _letter_candidates_cv2(image, cv2)
+        detections = _detections_from_letter_candidates(frame, cfg, candidates, templates, cv2)
+        if detections:
+            return detections
+        # OpenCV thresholding can merge the synthetic/field white dial region
+        # into one large contour. The NumPy connected-component path is more
+        # conservative for black-on-light zone labels, so use it as a fallback.
+        candidates = _letter_candidates_numpy(image)
     else:
         candidates = _letter_candidates_numpy(image)
 
+    return _detections_from_letter_candidates(frame, cfg, candidates, templates, cv2)
+
+
+def _detections_from_letter_candidates(
+    frame: VisionFrame,
+    cfg: FixedDetectionConfig,
+    candidates: list[tuple[dict[str, int], np.ndarray]],
+    templates: dict[str, np.ndarray],
+    cv2: Any | None,
+) -> list[dict[str, Any]]:
     detections: list[dict[str, Any]] = []
     seen: set[str] = set()
     for bbox, binary_roi in candidates:
@@ -492,7 +509,7 @@ def _save_letter_debug(
     roi = frame.image[y1:y2, x1:x2]
     safe_conf = int(confidence * 1000)
     if cv2 is not None:
-        cv2.imwrite(str(out_dir / f"letter_roi_{letter}_{safe_conf}_{frame.frame_id:06d}_{millis}.jpg"), roi)
+        _cv2_imwrite(cv2, out_dir / f"letter_roi_{letter}_{safe_conf}_{frame.frame_id:06d}_{millis}.jpg", roi)
         debug = frame.image.copy()
         cv2.rectangle(debug, (x1, y1), (x2, y2), (255, 255, 0), 2)
         cv2.putText(
@@ -504,7 +521,7 @@ def _save_letter_debug(
             (255, 255, 0),
             2,
         )
-        cv2.imwrite(str(out_dir / f"letter_debug_{letter}_{safe_conf}_{frame.frame_id:06d}_{millis}.jpg"), debug)
+        _cv2_imwrite(cv2, out_dir / f"letter_debug_{letter}_{safe_conf}_{frame.frame_id:06d}_{millis}.jpg", debug)
         return
     debug = frame.image.copy()
     _draw_rect_numpy(debug, bbox, color=(255, 255, 0))
@@ -572,7 +589,7 @@ def _save_inspection_debug(
             if gauge_bbox:
                 _draw_rect_numpy(debug, gauge_bbox, color=(0, 255, 255))
     if cv2 is not None:
-        cv2.imwrite(str(out_dir / f"inspection_debug_{frame.frame_id:06d}_{millis}.jpg"), debug)
+        _cv2_imwrite(cv2, out_dir / f"inspection_debug_{frame.frame_id:06d}_{millis}.jpg", debug)
     else:
         _write_ppm(out_dir / f"inspection_debug_{frame.frame_id:06d}_{millis}.ppm", debug)
 
@@ -826,7 +843,7 @@ def _save_gauge_debug(
     x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
     roi = frame.image[y1:y2, x1:x2]
     if cv2 is not None:
-        cv2.imwrite(str(out_dir / f"gauge_roi_{frame.frame_id:06d}_{millis}.jpg"), roi)
+        _cv2_imwrite(cv2, out_dir / f"gauge_roi_{frame.frame_id:06d}_{millis}.jpg", roi)
         debug = frame.image.copy()
         cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 255), 2)
         cv2.line(debug, (line[0], line[1]), (line[2], line[3]), (0, 0, 255), 2)
@@ -839,7 +856,7 @@ def _save_gauge_debug(
             (0, 255, 255),
             2,
         )
-        cv2.imwrite(str(out_dir / f"gauge_debug_{frame.frame_id:06d}_{millis}.jpg"), debug)
+        _cv2_imwrite(cv2, out_dir / f"gauge_debug_{frame.frame_id:06d}_{millis}.jpg", debug)
         return
     _write_ppm(out_dir / f"gauge_roi_{frame.frame_id:06d}_{millis}.ppm", roi)
     _write_ppm(out_dir / f"gauge_debug_{frame.frame_id:06d}_{millis}.ppm", frame.image)
@@ -873,6 +890,18 @@ def _write_png_gray(path: Path, image: np.ndarray) -> None:
     payload += chunk(b"IDAT", zlib.compress(raw))
     payload += chunk(b"IEND", b"")
     path.write_bytes(payload)
+
+
+def _cv2_imwrite(cv2: Any, path: Path, image: np.ndarray) -> bool:
+    if cv2.imwrite(str(path), image):
+        return True
+    suffix = path.suffix or ".jpg"
+    success, encoded = cv2.imencode(suffix, image)
+    if not success:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded.tofile(str(path))
+    return True
 
 
 def _try_cv2() -> Any | None:

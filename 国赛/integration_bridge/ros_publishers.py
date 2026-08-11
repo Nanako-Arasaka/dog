@@ -11,10 +11,15 @@ class RosBridgePublishers:
 
         self._string_type = String
         self._inspection_pub = node.create_publisher(String, "/inspection/all", 10)
+        self._inspection_detailed_pub = node.create_publisher(String, "/inspection/all_detailed", 10)
         self._placement_pub = node.create_publisher(String, "/placement/recognized_zone", 10)
 
     def publish_inspection_all(self, text: str) -> None:
         self._inspection_pub.publish(self._string_type(data=text))
+
+    def publish_inspection_all_detailed(self, text: str) -> None:
+        """发布保留 low/high 区分的详细巡检结果，供语音播报节点订阅。"""
+        self._inspection_detailed_pub.publish(self._string_type(data=text))
 
     def publish_placement_zone(self, zone: str) -> None:
         self._placement_pub.publish(self._string_type(data=zone))

@@ -1,0 +1,65 @@
+waypoints:
+  - name: start_exit
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: obstacle_entry
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: obstacle_exit
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: inspection_box_1_side_1
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: inspection_box_1_side_2
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: inspection_box_2_side_1
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: inspection_box_2_side_2
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: pick_area
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: place_A
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: place_B
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: place_C
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: place_D
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  - name: finish
+    x: 0.0
+    y: 0.0
+    yaw: 0.0

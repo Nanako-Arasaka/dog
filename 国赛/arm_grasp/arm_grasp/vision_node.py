@@ -56,6 +56,12 @@ class VisionNode(Node):
         self.target_color = self.declare_parameter('target_color', 'red').value
         self.min_area = self.declare_parameter('min_area', 500).value
         self.min_conf = self.declare_parameter('min_confidence', 0.3).value
+        self.color_topic = self.declare_parameter(
+            'color_topic', '/rgbd_cam/color/image_rect_color').value
+        self.depth_topic = self.declare_parameter(
+            'depth_topic', '/rgbd_cam/depth/image_raw').value
+        self.info_topic = self.declare_parameter(
+            'info_topic', '/rgbd_cam/color/camera_info').value
 
         # 状态
         self.bridge = CvBridge()
@@ -65,11 +71,11 @@ class VisionNode(Node):
         self.pending_request = None   # 待处理的检测请求颜色
 
         # 订阅 — 相机
-        self.create_subscription(Image, '/rgbd_cam/color/image_rect_color',
+        self.create_subscription(Image, self.color_topic,
                                  self._cb_color, 10)
-        self.create_subscription(Image, '/rgbd_cam/depth/image_raw',
+        self.create_subscription(Image, self.depth_topic,
                                  self._cb_depth, 10)
-        self.create_subscription(CameraInfo, '/rgbd_cam/color/camera_info',
+        self.create_subscription(CameraInfo, self.info_topic,
                                  self._cb_info, 10)
 
         # 订阅 — 检测请求

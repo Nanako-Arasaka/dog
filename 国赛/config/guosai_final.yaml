@@ -1,0 +1,128 @@
+runtime:
+  logs_root: logs
+  default_log_prefix: final
+  dry_run: false
+
+slam:
+  map_path: /home/jetson/Desktop/guosai/slam_maps/guosai_rgbd_map_FINAL.osa
+  settings_yaml: /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_FINAL.yaml
+  vocabulary_path: ${GUOSAI_ROOT}/controller/ORB_SLAM3/Vocabulary/ORBvoc.txt
+  waypoints_yaml: /home/jetson/Desktop/guosai/slam_maps/waypoints_FINAL.yaml
+  pose_topic: /camera_pose
+  pose_type: pose_stamped
+  stable_samples: 15
+  stable_max_position_step: 0.08
+  stable_max_yaw_step: 0.35
+  pose_timeout_sec: 0.8
+  jump_position_threshold: 0.45
+  jump_yaw_threshold: 1.2
+
+realsense:
+  color_topic: /camera/camera/color/image_raw
+  depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+  color_info_topic: /camera/camera/color/camera_info
+  command: >-
+    ros2 launch realsense2_camera rs_launch.py
+    enable_color:=true
+    enable_depth:=true
+    align_depth.enable:=true
+
+orbslam3:
+  # Adjust this command if your ORB-SLAM3 ROS wrapper uses another executable
+  # name or a different map-loading flag. The launch file still applies the
+  # required RGB-D topic remaps below.
+  command: >-
+    ros2 run orbslam3 rgbd
+    ${GUOSAI_ROOT}/controller/ORB_SLAM3/Vocabulary/ORBvoc.txt
+    /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_FINAL.yaml
+    /home/jetson/Desktop/guosai/slam_maps/guosai_rgbd_map_FINAL.osa
+    --ros-args
+    -r /camera/color/image_raw:=/camera/camera/color/image_raw
+    -r /camera/aligned_depth_to_color/image_raw:=/camera/camera/aligned_depth_to_color/image_raw
+
+motion:
+  receiver_host: 127.0.0.1
+  receiver_port: 5005
+  send_hz: 10.0
+  nav_cmd_topic: /motion/nav_cmd
+  avoid_cmd_topic: /motion/avoid_cmd
+  stop_topic: /motion/stop
+  mux_state_topic: /motion_mux/state
+  max_cmd_age_sec: 0.6
+  max_vx: 0.35
+  max_vy: 0.15
+  max_wz: 0.55
+  obstacle_priority: true
+
+navigation:
+  goal_topic: /waypoint/goal
+  status_topic: /waypoint/status
+  cmd_topic: /motion/nav_cmd
+  goal_tolerance: 0.16
+  yaw_tolerance: 0.22
+  kp_linear: 0.45
+  kp_angular: 1.2
+  max_vx: 0.28
+  max_wz: 0.45
+  rotate_in_place_angle: 0.75
+
+cone_avoidance:
+  enabled_topic: /motion/enable_cone_avoidance
+  cmd_topic: /motion/avoid_cmd
+  model: ${GUOSAI_ROOT}/cone_avoidance/scripts/cone_yolo_best.pt
+  camera: "0"
+  conf: 0.35
+  send_hz: 8.0
+  no_display: true
+
+inspection:
+  live_detect_command: >-
+    python3 live_detect_yolo_opencv.py
+    --model ${GUOSAI_ROOT}/best.pt
+    --camera-id 4
+    --camera-path /dev/video4
+    --no-gui
+    --no-stream
+  bridge_log_path: output/integration_bridge/final_events.jsonl
+  required_boxes: [inspection_box_1_side_1, inspection_box_1_side_2, inspection_box_2_side_1, inspection_box_2_side_2]
+  wait_timeout_sec: 45.0
+  per_waypoint_wait_sec: 5.0
+  result_topic: /inspection/all
+  target_topic: /inspection/target_zones
+
+arm:
+  grasp_config: ${GUOSAI_ROOT}/arm_grasp/config/grasp_config.yaml
+  use_services: true
+  grasp_service: /arm/grasp_red_bar
+  place_service_prefix: /arm/place_
+  direct_grasp_topic: /task/direct_grasp
+  arm_command_topic: /arm/command
+  feedback_topic: /arm/feedback
+  max_retries: 3
+  feedback_timeout_sec: 20.0
+
+voice_broadcast:
+  enabled: true
+  audio_dir: ${GUOSAI_ROOT}/output/audio
+  engine: mock            # mock | aplay | ffplay  (Jetson 现场用 aplay)
+  gap_sec: 0.4
+  result_topic: /inspection/all              # 兜底（abnormal/normal，无法区分偏低/偏高）
+  detailed_topic: /inspection/all_detailed   # 主用（low/normal/high，保留偏低/偏高）
+  state_topic: /competition/state
+  playback_log_path: ${GUOSAI_ROOT}/output/voice_broadcast/playback.tsv
+  device: ""            # aplay 声卡, 如 plughw:1,0; 空=默认卡(优先用狗自带扬声器, 见 scripts/check_onboard_audio.sh)
+
+fsm:
+  start_waypoint: start_exit
+  obstacle_entry_waypoint: obstacle_entry
+  obstacle_exit_waypoint: obstacle_exit
+  inspection_waypoints: [inspection_box_1_side_1, inspection_box_1_side_2, inspection_box_2_side_1, inspection_box_2_side_2]
+  pick_waypoint: pick_area
+  place_waypoints:
+    A: place_A
+    B: place_B
+    C: place_C
+    D: place_D
+  final_waypoint: finish
+  max_abnormal_zones: 2
+  auto_start: true
