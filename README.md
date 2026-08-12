@@ -102,6 +102,8 @@ ros2 launch launch/guosai_final.launch.py
 
 完整现场流程见 `docs/Jetson_现场执行清单.md`，部署包见 `jetson_payload/`。
 
+> 状态（2026-08-12，Jetson 真机联调）：`dry-run` 已跑通，FSM 13 态端到端走完，5 节点全部启动；preflight 代码类检查全部通过，剩余均为现场动作（航点采集 / 语音 engine/device 配置）。
+
 ### 2.5 国赛目录结构
 
 ```text
@@ -133,7 +135,7 @@ ros2 launch launch/guosai_final.launch.py
 
 ### 2.6 环境要求
 
-- **Jetson**：Jetson Xavier NX、Ubuntu、Python 3.8+、OpenCV、PyTorch + Ultralytics、ROS2 Humble
+- **Jetson**：Jetson（真机为 Orin NX）、Ubuntu 22.04、Python 3.10、OpenCV、PyTorch + Ultralytics、ROS2 Humble
 - **狗本体**：仅运行轻量运动接收与 watchdog，不部署视觉/SLAM/状态机
 - **大文件（Git LFS）**：`*.osa`（SLAM 地图）由 Git LFS 管理，clone 后执行 `git lfs pull` 获取实体
 
@@ -141,6 +143,15 @@ ros2 launch launch/guosai_final.launch.py
 pip install -r 国赛/requirements.txt
 git lfs pull   # 拉取 SLAM 地图等大文件
 ```
+
+#### 部署要点（Jetson 真机已验证）
+
+| 项 | 说明 |
+|---|---|
+| SLAM 地图 | 指向真机建图产物 `guosai_rgbd_map_v4.osa`（308 MB）+ `guosai_realsense_rgbd_localization_v4.yaml`（`config/guosai_final.yaml` 已对齐） |
+| ORB 词汇 | preflight 支持 fallback：优先仓库内 `controller/ORB_SLAM3/Vocabulary/ORBvoc.txt`，缺失时自动回退 `/home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt`（139 MB 解压文件不入库） |
+| 机械臂消息包 | `ros_robot_controller_msgs` 需手动 cmake install 到 `arm_grasp/install/`；`run_guosai_final.sh` / `guosai_onekey.sh` 已内置 AMENT_PREFIX_PATH / PYTHONPATH 注册（绕开 colcon 嵌套包路径 bug） |
+| 语音引擎 | 现场需将 `voice_broadcast.engine` 改为 `aplay` 并填 `device: plughw:X,0`（外置 USB 扬声器卡号）；launch 已对空 device 做兜底 |
 
 ### 2.7 关键 ROS2 话题
 

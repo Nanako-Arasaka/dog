@@ -122,7 +122,7 @@ YOLO 检测锥桶（`cone_avoidance/scripts/cone_yolo_best.pt`，conf 0.35）→
 
 ### Jetson 算力板
 
-- Jetson Xavier NX（算力不得高于此），Ubuntu，Python 3.8+，OpenCV。
+- Jetson（真机为 Orin NX），Ubuntu 22.04，Python 3.10，OpenCV。
 - YOLO：PyTorch + Ultralytics。
 - ROS2 Humble（机械臂、状态转发、导航联调）。
 
@@ -131,6 +131,15 @@ cd 国赛
 python3 -m pip install -r requirements.txt
 source /opt/ros/humble/setup.bash
 ```
+
+### 部署要点（Jetson 真机已验证）
+
+| 项 | 说明 |
+|---|---|
+| SLAM 地图 | `config/guosai_final.yaml` 指向真机建图产物 `guosai_rgbd_map_v4.osa`（308 MB）+ `guosai_realsense_rgbd_localization_v4.yaml` |
+| ORB 词汇 | `scripts/preflight_guosai_final.py` 支持 fallback：优先仓库内路径，缺失时回退 `/home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt`（139 MB 解压文件不入库，与 `guosai_onekey.sh` 运行时行为一致） |
+| 机械臂消息包 | `ros_robot_controller_msgs` 手动 cmake install 到 `arm_grasp/install/`；`run_guosai_final.sh` / `guosai_onekey.sh` 已内置 AMENT_PREFIX_PATH / PYTHONPATH 注册（绕开 colcon 嵌套包路径 bug） |
+| 语音引擎 | 现场将 `voice_broadcast.engine` 改为 `aplay` + `device: plughw:X,0`（外置 USB 扬声器）；`launch/guosai_final.launch.py` 已对空 device 兜底，避免 rclpy 参数解析报错 |
 
 ### 狗本体
 
@@ -146,6 +155,8 @@ git lfs pull
 ```
 
 ## 启动方式
+
+> 状态（2026-08-12，Jetson 真机）：`dry-run` 已跑通，FSM 13 态端到端走完，5 节点全部启动；preflight 代码类检查全部通过，剩余均为现场动作（航点采集 / 语音 engine/device 配置）。
 
 ### 一键启动（现场推荐）
 
