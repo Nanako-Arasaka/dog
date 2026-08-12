@@ -213,6 +213,15 @@ def _setup(context, *args, **kwargs):
             ),
             _py_node(
                 root,
+                "arm_grasp/ros_robot_controller/ros_robot_controller/serial_bridge_node.py",
+                {
+                    "device": _expand(arm.get("serial_device", "/dev/ttyUSB0"), root),
+                    "baudrate": int(arm.get("serial_baudrate", 1000000)),
+                },
+                "serial_bridge_node",
+            ),
+            _py_node(
+                root,
                 "arm_grasp/arm_grasp/arm_control_node.py",
                 {"config_path": _expand(arm.get("grasp_config", ""), root)},
                 "arm_control_node",

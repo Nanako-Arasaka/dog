@@ -167,6 +167,23 @@ if [[ -d "$ARM_GRASP_INSTALL/share/ros_robot_controller_msgs" ]]; then
   export PYTHONPATH="$ARM_GRASP_INSTALL/local/lib/python3.10/dist-packages:${PYTHONPATH:-}"
   echo "[INFO] arm_grasp msgs paths registered (manual cmake install workaround)"
 fi
+export PYTHONPATH="$HOME:${PYTHONPATH:-}"
+echo "[INFO] ~/ in PYTHONPATH (for ~/ros_robot_controller_sdk.py symlink)"
+
+# LD_LIBRARY_PATH for msgs/ros_robot_controller typesupport .so (manual cmake install)
+if [[ -d "$ARM_GRASP_INSTALL/lib" ]]; then
+  export LD_LIBRARY_PATH="$ARM_GRASP_INSTALL/lib:${LD_LIBRARY_PATH:-}"
+  echo "[INFO] msgs .so path registered"
+fi
+
+# Workaround: colcon build dropped ros_robot_controller install into a sub-directory
+# (ros_robot_controller/install/), not arm_grasp/install/. Register it explicitly.
+ROS_RC_INSTALL="$ROOT_DIR/arm_grasp/ros_robot_controller/install"
+if [[ -d "$ROS_RC_INSTALL/ros_robot_controller" ]]; then
+  export AMENT_PREFIX_PATH="$ROS_RC_INSTALL:${AMENT_PREFIX_PATH:-}"
+  export PYTHONPATH="$ROS_RC_INSTALL/lib/python3.10/site-packages:${PYTHONPATH:-}"
+  echo "[INFO] ros_robot_controller install path registered (colcon sub-dir workaround)"
+fi
 
 if [[ "$SKIP_PREFLIGHT" != "true" ]]; then
   echo "[INFO] Running preflight checks..."
