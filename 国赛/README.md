@@ -1,168 +1,162 @@
-# 国赛 · 最终集成版
+<p align="center">
+  <img src="assets/hero.png" alt="四足机器人国赛自主巡检系统" width="100%">
+</p>
 
-2026 年中国高校智能机器人创意大赛（四足大型组）国赛任务代码。本目录实现完整的比赛闭环：**锥形桶避障 → 仪表盘巡检识别（语音播报）→ 红色异常长条抓取 → 放置区字母识别与精确放置**，并集成了 ORB-SLAM3 视觉导航、motion_mux 运动仲裁与一键启动流程。
+<h1 align="center">四足机器人国赛自主巡检系统</h1>
 
-部署采用「Jetson 算力板负责主要计算，狗本体只保留底层运动执行和安全兜底」的分布式架构：YOLO、OpenCV 读表、放置区识别、任务状态机、机械臂高层控制与 SLAM/路径决策全部放在 Jetson（Xavier NX）；狗端只接收速度指令并执行 watchdog 停机。
+<p align="center">
+  绝影 Lite2 四足机器狗 + Jetson Xavier NX，在 2026 中国高校智能机器人创意大赛（四足大型组）国赛中的自主巡检方案
+</p>
 
-## 项目架构
+<p align="center">
+  <a href="https://github.com/Nanako-Arasaka/dog/stargazers"><img src="https://img.shields.io/github/stars/Nanako-Arasaka/dog?style=flat&logo=github" alt="Stars"></a>
+  <img src="https://img.shields.io/github/last-commit/Nanako-Arasaka/dog" alt="Last commit">
+  <img src="https://img.shields.io/badge/ROS2-Humble-blue" alt="ROS2 Humble">
+  <img src="https://img.shields.io/badge/Python-3.10-blue" alt="Python 3.10">
+  <img src="https://img.shields.io/badge/PyTorch-2.x-ee4c2c" alt="PyTorch">
+  <img src="https://img.shields.io/badge/OpenCV-4.x-5c3ee8" alt="OpenCV">
+</p>
+
+> 一句话：让四足机器狗自己走完一条巡检路线——躲开锥桶、读仪表盘、用中文喊话、抓红色长条、再放进对应字母的箱子里。
+
+---
+
+## 目录
+
+- [项目背景](#项目背景)
+- [比赛任务与评分](#比赛任务与评分)
+- [系统架构](#系统架构)
+- [任务流程（FSM）](#任务流程fsm)
+- [核心模块](#核心模块)
+- [目录结构](#目录结构)
+- [快速开始](#快速开始)
+- [部署要点](#部署要点)
+- [调试指令](#调试指令)
+- [文档索引](#文档索引)
+- [当前状态与待办](#当前状态与待办)
+- [许可证](#许可证)
+
+---
+
+## 项目背景
+
+这是为「2026 中国高校智能机器人创意大赛 · 四足大型组」国赛写的整套运行代码。比赛要求机器狗在 10 分钟内自主完成一条固定路线：**避障 → 巡检识别 → 抓取放置**，全程不能人为干预。
+
+我们的架构思路很直接：把重活都放在 Jetson 算力板上，狗本体只负责两件最底层的事——接收速度指令、超时自己停机。YOLO 检测、OpenCV 读表、放置区识别、任务状态机、机械臂高层控制、SLAM 与路径决策，全在 Jetson（Xavier NX）上跑；狗端只跑一个轻量的运动接收程序和看门狗。
+
+这样分工的好处是：狗端崩了不至于带着人跑，Jetson 端想怎么迭代算法都不用动狗。
+
+## 比赛任务与评分
+
+| 任务 | 分值 | 我们怎么拿 |
+|---|---:|---|
+| 锥形桶避障 | 10 | YOLO 检测 + 四级规则策略，8 Hz 下发速度指令 |
+| 巡检识别（含语音播报） | 40 | 4 个巡检点读表，结果用中文语音播报（只播不喊直接少一半分） |
+| 红色长条抓取放置 | 50 | 抓 2 次红条，按异常区域放进对应字母（A/B/C/D）的箱子 |
+
+> 语音播报不是锦上添花——巡检那 40 分里，有播报和只终端打印是两档分。所以代码里专门做了 `voice_broadcast_node`，预生成了 12 路中文音频（A/B/C/D × 偏低/正常/偏高）。
+
+## 系统架构
+
+```mermaid
+flowchart TB
+    Cam["RealSense D435i 摄像头"] --> Jetson
+
+    subgraph Jetson["Jetson Xavier NX（算力板）"]
+        YOLO["YOLO 检测\n（巡检区 / 锥桶 / 红条）"] --> Bridge["integration_bridge\n状态统一 + 转发"]
+        Bridge --> FSM["task_manager 状态机"]
+        Gauge["gauge_reader\n指针角度 → low/normal/high"] --> Bridge
+        FSM --> Nav["waypoint_navigator\n按航点导航"]
+        FSM --> Voice["voice_broadcast_node\n播报中文语音"]
+        FSM --> Arm["arm_grasp\n机械臂抓取 / 放置"]
+    end
+
+    Nav --> Mux["motion_mux\n仲裁 导航/避障/急停"]
+    Mux -->|"UDP vx/vy/wz"| Dog["狗本体 Lite2\n执行 + 看门狗停机"]
+    Arm --> Dog
+```
+
+## 任务流程（FSM）
+
+整条任务是一条状态机串起来的：进障碍区躲锥桶 → 4 个巡检点读表并播报 → 抓取区抓红条 → 按异常区域放到对应箱子 → 结束。
+
+```mermaid
+flowchart LR
+    S(["start_exit"]) --> OE["obstacle_entry"]
+    OE --> AV{{"锥桶避障"}}
+    AV --> OX["obstacle_exit"]
+    OX --> B1["inspection_box_1\n_side_1 / _side_2"]
+    B1 --> B2["inspection_box_2\n_side_1 / _side_2"]
+    B2 --> PICK["pick_area\n抓红条"]
+    PICK --> PLACED{{"place A / B / C / D"}}
+    PLACED --> F(["finish"])
+```
+
+状态机的航点定义在 `jetson_payload/slam_maps/waypoints_FINAL.yaml`，需要到现场采集真实坐标后填入（见[当前状态与待办](#当前状态与待办)）。
+
+## 核心模块
+
+**1. 巡检识别（40 分）**
+`main` 流程里 `live_detect_yolo_opencv.py` 用 YOLO 定位 5 类区域（zone_A/B/C/D + gauge），裁出仪表盘 ROI；`gauge_reader.py` 走经典 CV 管线读指针角度并判 `low/normal/high`：灰度 → 高斯模糊 → CLAHE → Canny → 霍夫圆 → 霍夫直线 → HSV 色带分类，每一级都有降级兜底。结果经 `integration_bridge` 冻结（每区 3 次一致）后发布。
+
+**2. 语音播报（决定巡检那 40 分能不能拿满）**
+`nodes/voice_broadcast_node.py` 订阅巡检结果，按 `A_低/正常/高` 等 12 种组合播放 `output/audio/` 下预生成的 wav。支持 `mock` / `aplay` / `ffplay` 三种引擎，现场用 `aplay` 驱动外置 USB 扬声器。
+
+**3. 锥形桶避障（10 分）**
+YOLO 检测锥桶（conf 0.35）→ 四级规则策略：紧急停车（面积 > 20%）→ 主动避障（中央区域或面积 > 8%）→ 微调偏航 → 全速前进（vx=0.16）。转向方向由左右锥桶加权面积比较决定，8 Hz 通过 UDP 下发狗端。
+
+**4. 红条抓取（50 分）**
+`arm_grasp/` 基于 JetArm 六自由度机械臂：HSV 双阈值红条检测 + RealSense 深度做 3D 位姿估计；几何法两连杆 IK；视觉闭环判定抓取成功（Δz > 3 cm），空抓按像素偏移定向重试。只有当放置区识别字母与异常目标一致时才松爪，防止误放。
+
+**5. SLAM 导航与运动仲裁**
+`controller/ORB_SLAM3/` 做 RGB-D 视觉定位，发布 `/camera_pose`；`waypoint_navigator` 按 FSM 顺序到达航点；`motion_mux` 仲裁导航/避障/急停速度；`lite2_motion_receiver.py` 把指令转成 Lite2 私有协议下发狗体（默认 `192.168.1.120:43893`），0.8 s 超时自动停机。
+
+## 目录结构
 
 ```text
 国赛/
-├── launch/guosai_final.launch.py     # 一键启动编排（ROS2 launch）
-├── nodes/                            # 国赛业务节点
-│   ├── voice_broadcast_node.py       #   语音播报（12 路中文音频）
-│   ├── waypoint_navigator.py         #   航点顺序导航
-│   ├── motion_mux.py                 #   运动指令仲裁（导航/避障/急停）
-│   ├── cone_avoidance_node.py        #   锥桶避障节点
-│   └── localization_watchdog.py      #   定位丢失看门狗
-├── scripts/                          # 现场脚本
-│   ├── guosai_onekey.sh              #   一键全流程（采集航点/预检/运行）
-│   ├── run_guosai_final.sh           #   正式运行入口
-│   ├── preflight_guosai_final.py     #   赛前预检
-│   ├── waypoint_capture_tool.py      #   航点采集工具
-│   └── gen_voice_audio.sh / check_onboard_audio.sh / repair_guosai_final_config.py
-├── config/guosai_final.yaml          # 最终运行配置（SLAM/相机/导航/避障/巡检/机械臂/语音/FSM）
-├── jetson_payload/                   # Jetson 部署包（FINAL SLAM 地图 + 上传脚本）
-├── live_detect_yolo_opencv.py        # 主线实时巡检：YOLO 定位 + OpenCV 读表
-├── gauge_reader.py                   # 仪表盘 ROI 指针角度读取（独立模块，多层降级）
-├── camera_input.py                   # 多输入源统一取流封装（mock/video/camera）
-├── vision_server.py                  # TCP 视觉服务（远端推理）
-├── integration_bridge/               # 状态转发层：格式统一、ROS2 topic 转发、巡检冻结
-├── arm_grasp/                        # JetArm 六自由度机械臂 ROS2 包
-│   ├── arm_control_node.py           #   IK 求解 + 舵机底层控制
-│   ├── vision_node.py                #   HSV 红条检测 + 3D 位姿估计
-│   ├── task_manager_node.py          #   抓取验证 + 重试状态机
-│   └── inspection_memory_node.py     #   异常区域记忆
-├── cone_avoidance/                   # 锥桶 YOLO 检测 + 策略（当前主线）
-├── obstacle_avoidance/               # 锥桶规则避障（早期模块，cone_strategy 四级策略）
-├── controller/                       # Lite2 移动接收、ORB-SLAM3、goal_controller
-├── output/audio/                     # 12 路中文语音播报（A/B/C/D × 偏低/正常/偏高）
-├── docs/                             # 技术文档 / HANDOFF / 现场清单 / 视频脚本
-├── tools/ tests/ runs/ models/       # 数据集工具、单元测试、训练产物、模型
-└── requirements.txt
+├── launch/guosai_final.launch.py   # 一键启动编排（ROS2 launch）
+├── nodes/                          # 业务节点
+│   ├── voice_broadcast_node.py     #   语音播报（12 路中文音频）
+│   ├── waypoint_navigator.py       #   航点顺序导航
+│   ├── motion_mux.py               #   运动指令仲裁（导航/避障/急停）
+│   ├── cone_avoidance_node.py      #   锥桶避障
+│   └── localization_watchdog.py     #   定位丢失看门狗
+├── scripts/                        # 现场脚本（采集/预检/运行）
+├── config/guosai_final.yaml        # 运行配置（SLAM/相机/导航/避障/巡检/机械臂/语音/FSM）
+├── jetson_payload/                 # Jetson 部署包（FINAL SLAM 地图 + 上传脚本）
+├── live_detect_yolo_opencv.py      # 主线实时巡检：YOLO 定位 + OpenCV 读表
+├── gauge_reader.py                 # 仪表盘指针角度读取（多层降级）
+├── camera_input.py                 # 多输入源统一取流封装（mock/video/camera）
+├── arm_grasp/                      # JetArm 六自由度机械臂 ROS2 包
+├── cone_avoidance/                 # 锥桶 YOLO 检测 + 策略
+├── controller/                     # Lite2 运动接收、ORB-SLAM3、goal_controller
+├── integration_bridge/             # 状态转发层
+├── output/audio/                   # 12 路中文语音播报（A/B/C/D × 偏低/正常/偏高）
+└── docs/                           # 技术文档 / HANDOFF / 现场清单 / 视频脚本
 ```
 
-## 比赛主流程（FSM）
+## 快速开始
 
-```text
-start_exit → obstacle_entry → (锥桶避障) → obstacle_exit
-  → inspection_box_1_side_1/2 → inspection_box_2_side_1/2  (巡检识别 + 语音播报)
-  → pick_area  (红条抓取)
-  → place_A/B/C/D  (放置到异常区域)
-  → finish
-```
+### 环境
 
-状态机配置见 `config/guosai_final.yaml` 的 `fsm:` 段（航点由 `waypoints_FINAL.yaml` 定义，现场采集）。
-
-## 核心数据流
-
-```text
-摄像头 (RealSense D435i)
-  → Jetson：巡检识别 / 锥桶避障 / 放置区字母识别 / HSV 红条检测
-  → integration_bridge：统一状态并转发 ROS2 topic（巡检冻结，3 次一致才发布）
-  → waypoint_navigator：按 FSM 航点导航
-  → motion_mux：仲裁 导航/避障/急停 速度指令
-  → voice_broadcast_node：按巡检结果播报中文语音
-  → arm_grasp：根据异常区域抓红条，匹配目标纸箱后松爪
-  → controller：ORB-SLAM3 定位 + lite2_motion_receiver 下发 UDP
-  → 狗本体：执行 vx/vy/wz，超时自动停机
-```
-
-## 关键 ROS2 话题
-
-```text
-/bridge/inspection_result       # 桥接层输入：单区或整组巡检结果
-/inspection/all                 # 桥接层输出：A:abnormal,B:normal,...
-/inspection/all_detailed        # 详细状态：A:low,B:normal,...（语音播报主用）
-/inspection/target_zones        # 机械臂记忆节点输出：异常区域列表，例如 A,C
-/bridge/placement_zone          # 桥接层输入：放置区识别结果
-/placement/recognized_zone      # 桥接层输出：当前看到的放置区，例如 A
-/task/direct_grasp              # 触发机械臂抓取红条
-/arm/command · /arm/feedback    # 机械臂动作命令与反馈
-/competition/state              # 全局任务状态
-/motion/nav_cmd · /motion/avoid_cmd · /motion/stop  # 运动指令（motion_mux 仲裁）
-```
-
-## 模块说明
-
-### 1. 巡检识别（巡检识别 40 分）
-
-- `live_detect_yolo_opencv.py`：5 类 YOLO 定位 `zone_A/B/C/D/gauge`，裁剪仪表盘 ROI。
-- `gauge_reader.py`：经典 CV 管线读指针角度并判断 `low/normal/high`：
-  灰度化 → 高斯模糊 → CLAHE 增强 → Canny → 霍夫圆检测 → 霍夫直线 → HSV 色带分类。
-  多层降级：霍夫圆失败→ROI 中心；直线失败→暗色尖端；色带失败→角度阈值。
-- 巡检结果经 `integration_bridge` 冻结（每区 3 次一致）后发布 `/inspection/all`。
-
-### 2. 语音播报（语音满分 vs 仅终端减半）
-
-`nodes/voice_broadcast_node.py` 订阅巡检结果，按 `A_低/正常/高` 等 12 种组合播放 `output/audio/` 下预生成 wav，支持 mock / aplay / ffplay 引擎（Jetson 现场用 aplay）。
-
-### 3. 锥形桶避障（10 分）
-
-YOLO 检测锥桶（`cone_avoidance/scripts/cone_yolo_best.pt`，conf 0.35）→ `cone_strategy.py` 四级规则策略：
-紧急停车（面积>20%）→ 主动避障（中央区域或面积>8%）→ 微调偏航 → 全速前进（vx=0.16）。
-转向方向由左右锥桶加权面积比较决定，8 Hz UDP 下发狗端。
-
-### 4. 红条抓取（50 分）
-
-`arm_grasp/` 基于 JetArm 六自由度机械臂：
-- HSV 双阈值红条检测 + RealSense 深度 3D 位姿估计（手眼标定）。
-- 几何法两连杆 IK（两遍求解处理腕部 18 cm 连杆）。
-- 视觉反馈闭环：抓取前后 Δz>3 cm 判定成功；空抓按像素偏移×0.35 定向重试（≤10 次）；视觉丢失回退底座（≤3 次）。
-- 仅当放置区识别字母与异常目标一致时才放置，防止误放。
-
-### 5. SLAM 导航与运动仲裁
-
-- `controller/ORB_SLAM3/`：视觉 SLAM（RGB-D），发布 `/camera_pose`。
-- `nodes/waypoint_navigator.py`：按 FSM 顺序到达航点。
-- `nodes/motion_mux.py`：仲裁导航速度/避障速度/急停，`obstacle_priority: true`。
-- `controller/lite2_motion_receiver.py`：UDP 5005 接收 JSON 指令，转为 Lite2 私有协议下发狗体（默认 192.168.1.120:43893），0.8 s 超时停机。
-
-## 环境要求
-
-### Jetson 算力板
-
-- Jetson（真机为 Orin NX），Ubuntu 22.04，Python 3.10，OpenCV。
-- YOLO：PyTorch + Ultralytics。
-- ROS2 Humble（机械臂、状态转发、导航联调）。
+- Jetson Xavier NX，Ubuntu 22.04，Python 3.10，OpenCV
+- YOLO：`PyTorch` + `Ultralytics`
+- ROS2 Humble（机械臂、状态转发、导航联调）
+- `*.osa`（SLAM 地图）走 Git LFS，clone 后记得 `git lfs pull`
 
 ```bash
 cd 国赛
 python3 -m pip install -r requirements.txt
 source /opt/ros/humble/setup.bash
-```
-
-### 部署要点（Jetson 真机已验证）
-
-| 项 | 说明 |
-|---|---|
-| SLAM 地图 | `config/guosai_final.yaml` 指向真机建图产物 `guosai_rgbd_map_v4.osa`（308 MB）+ `guosai_realsense_rgbd_localization_v4.yaml` |
-| ORB 词汇 | `scripts/preflight_guosai_final.py` 支持 fallback：优先仓库内路径，缺失时回退 `/home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt`（139 MB 解压文件不入库，与 `guosai_onekey.sh` 运行时行为一致） |
-| 机械臂消息包 | `ros_robot_controller_msgs` 手动 cmake install 到 `arm_grasp/install/`；`run_guosai_final.sh` / `guosai_onekey.sh` 已内置 AMENT_PREFIX_PATH / PYTHONPATH 注册（绕开 colcon 嵌套包路径 bug） |
-| 语音引擎 | 现场将 `voice_broadcast.engine` 改为 `aplay` + `device: plughw:X,0`（外置 USB 扬声器）；`launch/guosai_final.launch.py` 已对空 device 兜底，避免 rclpy 参数解析报错 |
-
-### 狗本体
-
-- 仅运行轻量运动接收程序（`controller/lite2_motion_receiver.py`）与 watchdog。
-- 不建议在狗端运行 YOLO / OpenCV 读表 / ORB-SLAM3 / 任务状态机。
-
-### 大文件（Git LFS）
-
-`*.osa`（SLAM 地图）由 Git LFS 管理，clone 后：
-
-```bash
 git lfs pull
 ```
-
-## 启动方式
-
-> 状态（2026-08-12，Jetson 真机）：`dry-run` 已跑通，FSM 13 态端到端走完，5 节点全部启动；preflight 代码类检查全部通过，剩余均为现场动作（航点采集 / 语音 engine/device 配置）。
 
 ### 一键启动（现场推荐）
 
 ```bash
-bash scripts/guosai_onekey.sh          # 采集航点 → 预检 → 正式运行
-bash scripts/run_guosai_final.sh       # 直接运行正式流程
+bash scripts/guosai_onekey.sh     # 采集航点 → 预检 → 正式运行
+bash scripts/run_guosai_final.sh  # 直接运行正式流程
 ```
 
 ### ROS2 统一启动
@@ -173,43 +167,41 @@ export GUOSAI_ROOT=$(pwd)
 ros2 launch launch/guosai_final.launch.py
 ```
 
-### 分终端启动（调试）
+## 部署要点
+
+| 项 | 说明 |
+|---|---|
+| SLAM 地图 | `jetson_payload/slam_maps/guosai_rgbd_map_FINAL.osa`（322 MB），由 `config/guosai_final.yaml` 的 `slam.map_path` 指定 |
+| ORB 词汇 | `scripts/preflight_guosai_final.py` 优先用仓库内路径，缺失时回退 `/home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt`（139 MB，不入库） |
+| 机械臂消息包 | `ros_robot_controller_msgs` 手动 cmake install 到 `arm_grasp/install/`；启动脚本已内置 `AMENT_PREFIX_PATH` / `PYTHONPATH` 注册 |
+| 语音引擎 | 现场把 `voice_broadcast.engine` 改为 `aplay` + `device: plughw:X,0`（外置 USB 扬声器）；空 device 已有兜底，不会因参数解析报错 |
+
+> ⚠️ **已知配置坑**：`config/guosai_final.yaml` 里的 `slam.map_path` 目前仍指向旧的 `guosai_rgbd_map_v4.osa`，正式部署前需改成 `jetson_payload/slam_maps/guosai_rgbd_map_FINAL.osa`。
+
+### 狗本体
+
+只跑轻量的运动接收程序（`controller/lite2_motion_receiver.py`）和看门狗，**不建议**在狗端跑 YOLO / OpenCV 读表 / ORB-SLAM3 / 任务状态机。
+
+## 调试指令
 
 ```bash
-# 终端 1：状态转发层
-python3 integration_bridge/bridge_node.py
+# 查看任务状态
+ros2 topic echo /competition/state
 
-# 终端 2：巡检识别
-python3 live_detect_yolo_opencv.py --model best.pt --camera-id 4 --no-gui
+# 重置巡检冻结
+ros2 topic pub --once /inspection/reset std_msgs/msg/Bool "data: true"
 
-# 终端 3：机械臂
-cd arm_grasp && colcon build && source install/setup.bash
-ros2 launch arm_grasp jetarm_grasp.launch.py
-
-# 终端 4：狗端运动接收（先 dry-run）
-python3 controller/lite2_motion_receiver.py --listen-port 5005 --dry-run
-```
-
-### 关键调试指令
-
-```bash
-ros2 topic echo /competition/state                          # 查看任务状态
-ros2 topic pub --once /inspection/reset std_msgs/msg/Bool "data: true"   # 重置巡检冻结
+# 手动注入巡检结果（A 异常 / B 正常 / C 异常 / D 正常）
 ros2 topic pub --once /bridge/inspection_result std_msgs/msg/String \
-  "data: 'A:abnormal,B:normal,C:abnormal,D:normal'"         # 手动注入巡检结果
-ros2 topic pub --once /task/direct_grasp std_msgs/msg/String "data: 'red'"  # 触发抓红条
+  "data: 'A:abnormal,B:normal,C:abnormal,D:normal'"
+
+# 触发抓红条
+ros2 topic pub --once /task/direct_grasp std_msgs/msg/String "data: 'red'"
 ```
 
-## 测试
+分终端启动（调试用）的完整命令见 `docs/技术文档_草稿.md` 与 `jetson_payload/JETSON_RUN_COMMANDS.md`。
 
-```bash
-python -m pytest -q                                     # 单元测试
-python tools/test_camera_input.py                       # 多输入源
-python tools/test_remote_perception_client.py           # 远端视觉
-python tools/test_speaker_playback.py --save-playback-log   # 语音播报
-```
-
-## 相关文档
+## 文档索引
 
 | 文档 | 位置 |
 |---|---|
@@ -220,3 +212,21 @@ python tools/test_speaker_playback.py --save-playback-log   # 语音播报
 | 机械臂跑通流程 | `arm_grasp/JetArm_跑通流程.md` |
 | 运动控制运行流程 | `controller/Lite2正式运行流程.txt` |
 | Jetson 部署命令 | `jetson_payload/JETSON_RUN_COMMANDS.md` |
+
+## 当前状态与待办
+
+**已跑通（2026-08-12，Jetson 真机 dry-run）**：FSM 13 态端到端走完，5 个节点全部启动；preflight 代码类检查全部通过。剩下的都是现场动作：
+
+- [ ] **航点采集**：`jetson_payload/slam_maps/waypoints_FINAL.yaml` 里坐标目前全是 `0.0`，必须现场 `bash scripts/guosai_onekey.sh collect` 采集真实航点后填入
+- [ ] **语音配置**：现场把 `voice_broadcast.engine` 设为 `aplay` 并指定 `device`
+- [ ] **地图路径**：把 `config/guosai_final.yaml` 的 `slam.map_path` 从旧 `v4.osa` 改为 `FINAL.osa`（见[部署要点](#部署要点)）
+
+## 许可证
+
+本仓库暂未添加 LICENSE 文件。如需在教学、二次开发中使用或引用，请先联系作者。
+
+---
+
+<p align="center">
+  绝影 Lite2 · Jetson Xavier NX · ROS2 Humble · YOLO + OpenCV + ORB-SLAM3
+</p>
