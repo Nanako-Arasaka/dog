@@ -20,10 +20,13 @@ class AstraCameraNode(Node):
         # 发布相机内参
         self.pub_info = self.create_publisher(CameraInfo, '/rgbd_cam/color/camera_info', 10)
 
+        # 相机节点号（默认 0 = /dev/video0 = Orbbec RGB UVC）
+        self.camera_index = self.declare_parameter('camera_index', 0).value
+
         self.bridge = CvBridge()
 
         # 打开 RGB 摄像头 (Orbbec USB 2.0 Camera)
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(self.camera_index)
         self.cap.set(6, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)

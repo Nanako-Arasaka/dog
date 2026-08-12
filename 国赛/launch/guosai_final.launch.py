@@ -199,12 +199,15 @@ def _setup(context, *args, **kwargs):
         actions += [
             _py_node(
                 root,
+                "arm_grasp/astra_camera_node.py",
+                {"camera_index": 0},
+                "astra_camera_node",
+            ),
+            _py_node(
+                root,
                 "arm_grasp/arm_grasp/vision_node.py",
                 {
                     "config_path": _expand(arm.get("grasp_config", ""), root),
-                    "color_topic": realsense.get("color_topic", "/camera/camera/color/image_raw"),
-                    "depth_topic": realsense.get("depth_topic", "/camera/camera/aligned_depth_to_color/image_raw"),
-                    "info_topic": realsense.get("color_info_topic", "/camera/camera/color/camera_info"),
                 },
                 "arm_vision_node",
             ),
