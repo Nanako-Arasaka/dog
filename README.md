@@ -153,7 +153,7 @@ flowchart LR
 |---|---|---|
 | 巡检识别 | `live_detect_yolo_opencv.py`、`gauge_reader.py` | YOLO 定位 A/B/C/D 与仪表盘 ROI → OpenCV 读指针角度 → low/normal/high，多层降级兜底 |
 | 锥桶避障 | `cone_avoidance/`、`obstacle_avoidance/cone_strategy.py` | YOLO 检测锥桶（conf 0.35）→ 四级规则策略，8 Hz UDP 下发 |
-| 红条抓取 | `arm_grasp/`（arm_control / vision / task_manager / inspection_memory） | HSV 双阈值检测 + RealSense 深度 3D 位姿 + 两连杆 IK；视觉闭环判定成功、空抓定向重试 |
+| 红条抓取 | `arm_grasp/`（arm_control / vision / task_manager / inspection_memory） | HSV 双阈值检测 + Orbbec 深度 3D 位姿（`/rgbd_cam/*`）+ 两连杆 IK；视觉闭环判定成功、空抓定向重试 |
 | SLAM 导航 | `controller/`（ORB-SLAM3、goal_controller、lite2_motion_receiver） | ORB-SLAM3 视觉定位 → 航点导航 → motion_mux 仲裁 → UDP 下发狗体 |
 
 ### 语音播报
@@ -174,12 +174,13 @@ bash scripts/run_guosai_final.sh  # 直接运行正式流程
 
 | 项 | 说明 |
 |---|---|
-| SLAM 地图 | `国赛/jetson_payload/slam_maps/guosai_rgbd_map_FINAL.osa`（322 MB），由 `config/guosai_final.yaml` 的 `slam.map_path` 指定 |
+| SLAM 地图 | 真机建图产物 `guosai_rgbd_map_v4.osa`（308 MB，`config/guosai_final.yaml` 的 `slam.map_path` 已指向）；`国赛/jetson_payload/slam_maps/` 另存一份 FINAL 部署副本（307 MB） |
 | ORB 词汇 | preflight 优先用仓库内路径，缺失时回退 `/home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt`（139 MB，不入库） |
-| 机械臂消息包 | `ros_robot_controller_msgs` 手动 cmake install 到 `arm_grasp/install/`；启动脚本已内置 `AMENT_PREFIX_PATH` / `PYTHONPATH` 注册 |
+| 机械臂消息包 | `ros_robot_controller_msgs` 手动 cmake install 到 `arm_grasp/install/`；启动脚本已内置 `AMENT_PREFIX_PATH` / `PYTHONPATH` / `LD_LIBRARY_PATH` 注册（msgs Python 模块 + typesupport `.so`） |
 | 语音引擎 | 现场把 `voice_broadcast.engine` 改为 `aplay` 并填 `device: plughw:X,0`（外置 USB 扬声器），空 device 已有兜底 |
+| 机械臂视觉 | 用 **Orbbec**（`/rgbd_cam/*`，装在机械臂上，可覆盖抓取区）；RealSense（狗头）只负责巡检与避障 |
 
-> ⚠️ **已知配置坑**：`国赛/config/guosai_final.yaml` 的 `slam.map_path` 目前仍指向旧的 `guosai_rgbd_map_v4.osa`，正式部署前需改成 `FINAL.osa`。
+> ⚠️ **部署注意**：`slam.map_path` 需指向 Jetson 真机上的建图产物文件名（当前为 `guosai_rgbd_map_v4.osa`），若现场重新建图请同步更新；`waypoints_FINAL.yaml` 需现场采集航点后填充。
 
 ---
 
@@ -232,11 +233,11 @@ bash scripts/guosai_onekey.sh      # 采集航点 → 预检 → 正式运行
 
 **预选赛**：线上视频已提交。
 
-**国赛**（2026-08-12，Jetson 真机 dry-run）：FSM 13 态端到端走完，5 个节点全部启动；preflight 代码类检查全部通过。剩下的都是现场动作：
+**国赛**（2026-08-12，Jetson 真机）：dry-run FSM 13 态端到端走完，5 节点全启动；**机械臂已跑通**（serial_bridge + 5 舵机响应 set_position，踩坑记录见 `国赛/arm_grasp/readme.md` 第七节）；preflight 代码类检查全部通过。剩下的都是现场动作：
 
-- [ ] **航点采集**：`国赛/jetson_payload/slam_maps/waypoints_FINAL.yaml` 坐标目前全是 `0.0`，需现场 `bash scripts/guosai_onekey.sh collect` 采集真实航点后填入
+- [ ] **航点采集**：`waypoints_FINAL.yaml` 坐标目前全是 `0.0`，需现场 `bash scripts/guosai_onekey.sh collect` 采集真实航点后填入
 - [ ] **语音配置**：现场把 `voice_broadcast.engine` 设为 `aplay` 并指定 `device`
-- [ ] **地图路径**：把 `国赛/config/guosai_final.yaml` 的 `slam.map_path` 从旧 `v4.osa` 改为 `FINAL.osa`
+- [ ] **抓取闭环验证**：真实红条抓取冒烟（Orbbec 视觉 → 3D 位姿 → IK），量化 cam2arm 标定偏差与深度伪值影响
 
 ## 许可证
 
