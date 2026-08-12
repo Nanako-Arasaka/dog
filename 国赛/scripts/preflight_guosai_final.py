@@ -75,6 +75,25 @@ def check_path(reporter: Reporter, label: str, value: str, root: Path, required:
         reporter.warn(f"{label} not found: {path_text}")
 
 
+def check_orb_vocabulary(reporter: Reporter, value: str, root: Path) -> None:
+    """Check ORB vocabulary with /home/jetson/ORB_SLAM3 fallback.
+
+    Mirrors `scripts/guosai_onekey.sh:source_ros` fallback behavior so preflight
+    agrees with the runtime. Avoids forcing a 139 MB extraction that would also
+    push GitHub over its 100 MB file limit.
+    """
+    primary = expand(value, root)
+    fallback = "/home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt"
+    if primary and Path(primary).exists():
+        reporter.ok(f"ORB vocabulary: {primary}")
+    elif Path(fallback).exists():
+        reporter.ok(f"ORB vocabulary (fallback): {fallback}")
+    else:
+        reporter.error(
+            f"ORB vocabulary not found: {primary} (fallback {fallback} also missing)"
+        )
+
+
 def ros_pkg_exists(package: str) -> bool:
     if not package:
         return False
@@ -280,7 +299,7 @@ def main() -> int:
     check_path(reporter, "slam settings yaml", slam.get("settings_yaml", ""), root)
     check_path(reporter, "slam waypoints yaml", slam.get("waypoints_yaml", ""), root)
     check_waypoint_values(reporter, slam.get("waypoints_yaml", ""), root)
-    check_path(reporter, "ORB vocabulary", slam.get("vocabulary_path", ""), root)
+    check_orb_vocabulary(reporter, slam.get("vocabulary_path", ""), root)
 
     if as_bool(args.start_realsense):
         check_ros_command(reporter, "realsense", realsense.get("command", ""), root)

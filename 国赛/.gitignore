@@ -26,3 +26,8 @@ output/test_speaker_pytest/
 
 # ===== 日志 =====
 *.log
+
+# ===== Jetson 部署产物（不入库） =====
+arm_grasp/install/
+arm_grasp/log/
+config/*.bak.*

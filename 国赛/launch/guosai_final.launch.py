@@ -236,21 +236,23 @@ def _setup(context, *args, **kwargs):
 
     vb = cfg.get("voice_broadcast", {})
     if start_voice:
+        voice_params = {
+            "enabled": _bool_text(vb.get("enabled", True)),
+            "audio_dir": _expand(vb.get("audio_dir", "output/audio"), root),
+            "engine": vb.get("engine", "mock"),
+            "gap_sec": vb.get("gap_sec", 0.4),
+            "result_topic": vb.get("result_topic", "/inspection/all"),
+            "detailed_topic": vb.get("detailed_topic", "/inspection/all_detailed"),
+            "state_topic": vb.get("state_topic", "/competition/state"),
+            "playback_log_path": _expand(vb.get("playback_log_path", "output/voice_broadcast/playback.tsv"), root),
+        }
+        # rclpy rejects empty -p device:= args; default to "default" so aplay uses the system card.
+        voice_params["device"] = vb.get("device", "") or "default"
         actions.append(
             _py_node(
                 root,
                 "nodes/voice_broadcast_node.py",
-                {
-                    "enabled": _bool_text(vb.get("enabled", True)),
-                    "audio_dir": _expand(vb.get("audio_dir", "output/audio"), root),
-                    "engine": vb.get("engine", "mock"),
-                    "gap_sec": vb.get("gap_sec", 0.4),
-                    "result_topic": vb.get("result_topic", "/inspection/all"),
-                    "detailed_topic": vb.get("detailed_topic", "/inspection/all_detailed"),
-                    "state_topic": vb.get("state_topic", "/competition/state"),
-                    "playback_log_path": _expand(vb.get("playback_log_path", "output/voice_broadcast/playback.tsv"), root),
-                    "device": vb.get("device", ""),
-                },
+                voice_params,
                 "voice_broadcast_node",
             )
         )

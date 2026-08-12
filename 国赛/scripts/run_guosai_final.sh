@@ -157,6 +157,17 @@ for setup_file in \
   fi
 done
 
+# Workaround: colcon nested-package path bug leaves ros_robot_controller_msgs
+# out of AMENT_PREFIX_PATH / PYTHONPATH despite install/setup.bash being sourced.
+# The msgs package was built manually into arm_grasp/install/{share,local/lib}
+# so we register both paths explicitly for downstream python launch nodes.
+ARM_GRASP_INSTALL="$ROOT_DIR/arm_grasp/install"
+if [[ -d "$ARM_GRASP_INSTALL/share/ros_robot_controller_msgs" ]]; then
+  export AMENT_PREFIX_PATH="$ARM_GRASP_INSTALL:${AMENT_PREFIX_PATH:-}"
+  export PYTHONPATH="$ARM_GRASP_INSTALL/local/lib/python3.10/dist-packages:${PYTHONPATH:-}"
+  echo "[INFO] arm_grasp msgs paths registered (manual cmake install workaround)"
+fi
+
 if [[ "$SKIP_PREFLIGHT" != "true" ]]; then
   echo "[INFO] Running preflight checks..."
   python3 "$ROOT_DIR/scripts/preflight_guosai_final.py" \

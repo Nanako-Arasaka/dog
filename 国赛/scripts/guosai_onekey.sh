@@ -125,6 +125,16 @@ source_ros() {
       set -u
     fi
   done
+
+  # Workaround: colcon nested-package path bug leaves ros_robot_controller_msgs
+  # out of AMENT_PREFIX_PATH / PYTHONPATH despite install/setup.bash being sourced.
+  # The msgs package was built manually into arm_grasp/install/{share,local/lib}.
+  ARM_GRASP_INSTALL="$ROOT_DIR/arm_grasp/install"
+  if [[ -d "$ARM_GRASP_INSTALL/share/ros_robot_controller_msgs" ]]; then
+    export AMENT_PREFIX_PATH="$ARM_GRASP_INSTALL:${AMENT_PREFIX_PATH:-}"
+    export PYTHONPATH="$ARM_GRASP_INSTALL/local/lib/python3.10/dist-packages:${PYTHONPATH:-}"
+    echo "[INFO] arm_grasp msgs paths registered (manual cmake install workaround)"
+  fi
 }
 
 cfg_value() {

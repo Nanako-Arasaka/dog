@@ -4,8 +4,8 @@ runtime:
   dry_run: false
 
 slam:
-  map_path: /home/jetson/Desktop/guosai/slam_maps/guosai_rgbd_map_FINAL.osa
-  settings_yaml: /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_FINAL.yaml
+  map_path: /home/jetson/Desktop/guosai/slam_maps/guosai_rgbd_map_v4.osa
+  settings_yaml: /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_localization_v4.yaml
   vocabulary_path: ${GUOSAI_ROOT}/controller/ORB_SLAM3/Vocabulary/ORBvoc.txt
   waypoints_yaml: /home/jetson/Desktop/guosai/slam_maps/waypoints_FINAL.yaml
   pose_topic: /camera_pose
@@ -34,8 +34,8 @@ orbslam3:
   command: >-
     ros2 run orbslam3 rgbd
     ${GUOSAI_ROOT}/controller/ORB_SLAM3/Vocabulary/ORBvoc.txt
-    /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_FINAL.yaml
-    /home/jetson/Desktop/guosai/slam_maps/guosai_rgbd_map_FINAL.osa
+    /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_localization_v4.yaml
+    /home/jetson/Desktop/guosai/slam_maps/guosai_rgbd_map_v4.osa
     --ros-args
     -r /camera/color/image_raw:=/camera/camera/color/image_raw
     -r /camera/aligned_depth_to_color/image_raw:=/camera/camera/aligned_depth_to_color/image_raw
