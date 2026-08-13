@@ -110,7 +110,7 @@ voice_broadcast:
   detailed_topic: /inspection/all_detailed   # 主用（low/normal/high，保留偏低/偏高）
   state_topic: /competition/state
   playback_log_path: ${GUOSAI_ROOT}/output/voice_broadcast/playback.tsv
-  device: ""            # aplay 声卡, 如 plughw:1,0; 空=默认卡(优先用狗自带扬声器, 见 scripts/check_onboard_audio.sh)
+  device: ""            # aplay 声卡, 如 plughw:2,0 (亚博 USB 免驱声卡, 插上后 aplay -l 查卡号); 空=系统默认卡
 
 fsm:
   start_waypoint: start_exit

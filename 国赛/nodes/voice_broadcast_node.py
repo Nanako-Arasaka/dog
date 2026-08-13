@@ -82,8 +82,14 @@ class MiniSpeaker:
         self.log_path = Path(log_path) if log_path else None
         self._lock = threading.Lock()
 
-    def play(self, key: str) -> None:
-        threading.Thread(target=self._play, args=(key,), daemon=True).start()
+    def play(self, key: str) -> threading.Thread:
+        t = threading.Thread(target=self._play, args=(key,), daemon=True)
+        t.start()
+        return t
+
+    def play_blocking(self, key: str) -> None:
+        """同步播放（当前线程等到播放结束），用于逐条播报时避免打断/抢声卡。"""
+        self._play(key)
 
     def _play(self, key: str) -> None:
         fpath = self.audio_dir / f"{key}.wav"
@@ -212,7 +218,8 @@ class VoiceBroadcastNode(Node):
 
     def _play_plan(self, plan: list[str]) -> None:
         for key in plan:
-            self.speaker.play(key)
+            # 同步播放：等上一条播完再播下一条，避免 aplay 抢声卡/打断
+            self.speaker.play_blocking(key)
             time.sleep(self.gap_sec)
 
     # ---- 解析 ----
