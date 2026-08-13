@@ -9,6 +9,8 @@ slam:
   vocabulary_path: ${GUOSAI_ROOT}/controller/ORB_SLAM3/Vocabulary/ORBvoc.txt
   waypoints_yaml: /home/jetson/Desktop/guosai/slam_maps/waypoints_FINAL.yaml
   pose_topic: /camera_pose
+  # watchdog 仲裁后的融合位姿话题（SLAM 主源 + AprilTag 兜底），navigator 订阅它
+  fused_pose_topic: /camera_pose_fused
   pose_type: pose_stamped
   stable_samples: 15
   stable_max_position_step: 0.08
@@ -39,6 +41,25 @@ orbslam3:
     --ros-args
     -r /camera/color/image_raw:=/camera/camera/color/image_raw
     -r /camera/aligned_depth_to_color/image_raw:=/camera/camera/aligned_depth_to_color/image_raw
+
+tag_localizer:
+  # AprilTag 绝对定位兜底。tag 世界坐标必须先用 tools/calibrate_tags.py 现场标定，
+  # 否则 enabled 保持 false（占位坐标会输出错误位姿）。
+  enabled: false            # 标定完成并验证后置 true
+  fallback_enabled: true    # watchdog 是否允许切到 tag 源（enabled=false 时自动失效）
+  tags_yaml: ${GUOSAI_ROOT}/config/tags.yaml
+  pose_topic: /tag_localizer/pose
+  status_topic: /tag_localizer/status
+  seen_tags_topic: /tag_localizer/seen_tags
+  frame_id: map
+  detect_hz: 10.0
+  min_decision_margin: 12.0
+  # --- watchdog 仲裁参数 ---
+  tag_timeout_sec: 1.0        # tag 位姿新鲜度窗口
+  tag_stable_samples: 3       # tag 源稳定所需连续帧（比 SLAM 短，兜底要快）
+  switch_suppress_sec: 2.5    # 源切换迟滞窗口，防 slam/tag 乒乓
+  slam_distrust_sec: 2.0      # SLAM 跳变后的不信任窗口
+  fault_grace_sec: 0.5        # 双源全丢的宽限期，超过才判故障
 
 motion:
   receiver_host: 127.0.0.1

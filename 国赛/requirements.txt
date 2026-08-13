@@ -14,5 +14,13 @@ pytest>=7.0.0
 # 相机（按需启用）
 # pyrealsense2>=2.54.0
 
+# AprilTag 绝对定位兜底（nodes/tag_localizer_node.py 依赖）
+# 官方库精度最高，是主后端；需先装系统库 libapriltag（apt install libapriltag-dev
+# 或源码编译），再 pip install apriltag。JetPack 5 自带 OpenCV 4.5 不含 AprilTag
+# 字典（DICT_APRILTAG_36h11 需 OpenCV>=4.6），所以降级后端在 Xavier NX 上不可用，
+# 现场必须装官方 apriltag 库。
+# apriltag>=0.0.16
+# opencv-python>=4.8.0  # 图像转换 + 降级后端；cone_avoidance 已用到 cv2
+
 # 语音（按需启用）
 # (espeak 为系统包，非 Python 包)

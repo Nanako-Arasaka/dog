@@ -69,6 +69,10 @@ flowchart TB
         FSM --> Nav["waypoint_navigator\n按航点导航"]
         FSM --> Voice["voice_broadcast_node\n播报中文语音"]
         FSM --> Arm["arm_grasp\n机械臂抓取 / 放置"]
+
+        Slam["ORB-SLAM3\nRGB-D 视觉定位"] -->|"/camera_pose"| WD["localization_watchdog\nSLAM + AprilTag 仲裁"]
+        Tag["tag_localizer_node\nAprilTag 绝对定位兜底"] -->|"/tag_localizer/pose"| WD
+        WD -->|"/camera_pose_fused"| Nav
     end
 
     Nav --> Mux["motion_mux\n仲裁 导航/避障/急停"]
@@ -111,6 +115,9 @@ YOLO 检测锥桶（conf 0.35）→ 四级规则策略：紧急停车（面积 >
 **5. SLAM 导航与运动仲裁**
 `controller/ORB_SLAM3/` 做 RGB-D 视觉定位，发布 `/camera_pose`；`waypoint_navigator` 按 FSM 顺序到达航点；`motion_mux` 仲裁导航/避障/急停速度；`lite2_motion_receiver.py` 把指令转成 Lite2 私有协议下发狗体（默认 `192.168.1.120:43893`），0.8 s 超时自动停机。
 
+**6. AprilTag 兜底定位（新增，抗定位丢失）**
+纯视觉 SLAM 在白墙/强光/抖动下会丢失定位，一旦丢失即本轮判死。为此加了 AprilTag 绝对定位兜底：`tag_localizer_node` 用官方 apriltag 库（tag36h11）检测贴在场地关键位置的 tag，反推相机世界位姿；`localization_watchdog` 改为**双源仲裁**——SLAM 主源 + AprilTag 兜底，输出融合位姿 `/camera_pose_fused`（navigator 订阅它）。SLAM 丢失时自动切到 tag 源继续跑，SLAM 恢复后迟滞切回，双源全丢才判故障。tag 世界坐标用 `tools/calibrate_tags.py` 现场标定（`--verify` 验证 ≤10cm/5°），打印码用 `tools/generate_apriltags.py` 生成（标准 AprilTag 极性，官方库可直接检测）。
+
 ## 目录结构
 
 ```text
@@ -118,12 +125,17 @@ YOLO 检测锥桶（conf 0.35）→ 四级规则策略：紧急停车（面积 >
 ├── launch/guosai_final.launch.py   # 一键启动编排（ROS2 launch）
 ├── nodes/                          # 业务节点
 │   ├── voice_broadcast_node.py     #   语音播报（12 路中文音频）
-│   ├── waypoint_navigator.py       #   航点顺序导航
+│   ├── waypoint_navigator.py       #   航点顺序导航（订阅融合位姿）
 │   ├── motion_mux.py               #   运动指令仲裁（导航/避障/急停）
 │   ├── cone_avoidance_node.py      #   锥桶避障
-│   └── localization_watchdog.py     #   定位丢失看门狗
+│   ├── localization_watchdog.py     #   定位看门狗（SLAM + AprilTag 双源仲裁）
+│   └── tag_localizer_node.py        #   AprilTag 绝对定位兜底
 ├── scripts/                        # 现场脚本（采集/预检/运行）
-├── config/guosai_final.yaml        # 运行配置（SLAM/相机/导航/避障/巡检/机械臂/语音/FSM）
+├── tools/                          # 工具
+│   ├── calibrate_tags.py           #   AprilTag 世界坐标现场标定 / 验证
+│   └── generate_apriltags.py       #   生成 tag36h11 打印码（标准极性）
+├── config/guosai_final.yaml        # 运行配置（SLAM/相机/导航/避障/巡检/机械臂/语音/FSM/tag）
+├── config/tags.yaml                # AprilTag 定位点配置（10 个 tag 的世界位姿）
 ├── jetson_payload/                 # Jetson 部署包（FINAL SLAM 地图 + 上传脚本）
 ├── live_detect_yolo_opencv.py      # 主线实时巡检：YOLO 定位 + OpenCV 读表
 ├── gauge_reader.py                 # 仪表盘指针角度读取（多层降级）
@@ -133,7 +145,8 @@ YOLO 检测锥桶（conf 0.35）→ 四级规则策略：紧急停车（面积 >
 ├── controller/                     # Lite2 运动接收、ORB-SLAM3、goal_controller
 ├── integration_bridge/             # 状态转发层
 ├── output/audio/                   # 12 路中文语音播报（A/B/C/D × 偏低/正常/偏高）
-└── docs/                           # 技术文档 / HANDOFF / 现场清单 / 视频脚本
+├── output/apriltags/               # AprilTag 打印码（10 个 PNG + A4 拼版 PDF）
+└── docs/                           # 技术文档 / HANDOFF / 现场清单 / 视频脚本 / 场地布局
 ```
 
 ## 快速开始
@@ -175,6 +188,7 @@ ros2 launch launch/guosai_final.launch.py
 | ORB 词汇 | `scripts/preflight_guosai_final.py` 优先用仓库内路径，缺失时回退 `/home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt`（139 MB，不入库） |
 | 机械臂消息包 | `ros_robot_controller_msgs` 手动 cmake install 到 `arm_grasp/install/`；启动脚本已内置 `AMENT_PREFIX_PATH` / `PYTHONPATH` 注册 |
 | 语音引擎 | 现场把 `voice_broadcast.engine` 改为 `aplay` + `device: plughw:X,0`（外置 USB 扬声器）；空 device 已有兜底，不会因参数解析报错 |
+| AprilTag 兜底定位 | 现场需 `apt install libapriltag-dev` + `pip install apriltag`（JetPack 5 自带 OpenCV 4.5 无 AprilTag 字典，降级后端不可用）；贴好 10 个 tag 后用 `tools/calibrate_tags.py` 标定 → `--verify` 通过后把 `tag_localizer.enabled` 置 true |
 
 > ⚠️ **已知配置坑**：`config/guosai_final.yaml` 里的 `slam.map_path` 目前仍指向旧的 `guosai_rgbd_map_v4.osa`，正式部署前需改成 `jetson_payload/slam_maps/guosai_rgbd_map_FINAL.osa`。
 
@@ -197,6 +211,17 @@ ros2 topic pub --once /bridge/inspection_result std_msgs/msg/String \
 
 # 触发抓红条
 ros2 topic pub --once /task/direct_grasp std_msgs/msg/String "data: 'red'"
+
+# 查看 AprilTag 兜底定位状态（检测到哪个 tag / 融合位姿源）
+ros2 topic echo /tag_localizer/status
+ros2 topic echo /tag_localizer/seen_tags
+ros2 topic echo /localization/status
+
+# 生成 / 重标定 AprilTag 打印码
+python3 tools/generate_apriltags.py --ids 1,2,3 --size-cm 20
+python3 tools/calibrate_tags.py --tags-yaml config/tags.yaml
+python3 tools/calibrate_tags.py --tags-yaml config/tags.yaml --verify
+python3 tools/calibrate_tags.py --self-test
 ```
 
 分终端启动（调试用）的完整命令见 `docs/技术文档_草稿.md` 与 `jetson_payload/JETSON_RUN_COMMANDS.md`。
@@ -212,6 +237,7 @@ ros2 topic pub --once /task/direct_grasp std_msgs/msg/String "data: 'red'"
 | 机械臂跑通流程 | `arm_grasp/JetArm_跑通流程.md` |
 | 运动控制运行流程 | `controller/Lite2正式运行流程.txt` |
 | Jetson 部署命令 | `jetson_payload/JETSON_RUN_COMMANDS.md` |
+| 场地布局与 10 点定位地图 | `docs/场地布局_10点定位地图.md` |
 
 ## 当前状态与待办
 
@@ -220,6 +246,7 @@ ros2 topic pub --once /task/direct_grasp std_msgs/msg/String "data: 'red'"
 - [ ] **航点采集**：`jetson_payload/slam_maps/waypoints_FINAL.yaml` 里坐标目前全是 `0.0`，必须现场 `bash scripts/guosai_onekey.sh collect` 采集真实航点后填入
 - [ ] **语音配置**：现场把 `voice_broadcast.engine` 设为 `aplay` 并指定 `device`
 - [ ] **地图路径**：把 `config/guosai_final.yaml` 的 `slam.map_path` 从旧 `v4.osa` 改为 `FINAL.osa`（见[部署要点](#部署要点)）
+- [ ] **AprilTag 标定**：贴好 10 个 tag 后，现场 `python3 tools/calibrate_tags.py --tags-yaml config/tags.yaml` 标定 → `--verify` 验证 → 把 `tag_localizer.enabled` 置 true（标定前保持 false 不误启用）
 
 ## 许可证
 

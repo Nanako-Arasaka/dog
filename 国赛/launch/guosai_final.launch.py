@@ -85,6 +85,9 @@ def _setup(context, *args, **kwargs):
     arm = cfg.get("arm", {})
     realsense = cfg.get("realsense", {})
     fsm = cfg.get("fsm", {})
+    tag = cfg.get("tag_localizer", {})
+    tag_enabled = _as_bool(str(tag.get("enabled", False)))
+    tag_fallback = _as_bool(str(tag.get("fallback_enabled", tag_enabled)))
 
     actions = []
     if not dry_run and start_realsense:
@@ -118,17 +121,45 @@ def _setup(context, *args, **kwargs):
                 "jump_position_threshold": slam.get("jump_position_threshold", 0.45),
                 "jump_yaw_threshold": slam.get("jump_yaw_threshold", 1.2),
                 "stop_topic": motion.get("stop_topic", "/motion/stop"),
+                "tag_pose_topic": tag.get("pose_topic", "/tag_localizer/pose"),
+                "fused_pose_topic": slam.get("fused_pose_topic", "/camera_pose_fused"),
+                "enable_tag_fallback": _bool_text(tag_fallback),
+                "tag_timeout_sec": tag.get("tag_timeout_sec", 1.0),
+                "tag_stable_samples": tag.get("tag_stable_samples", 3),
+                "switch_suppress_sec": tag.get("switch_suppress_sec", 2.5),
+                "slam_distrust_sec": tag.get("slam_distrust_sec", 2.0),
+                "fault_grace_sec": tag.get("fault_grace_sec", 0.5),
             },
             "localization_watchdog",
         )
     )
+    if not dry_run and tag_enabled:
+        actions.append(
+            _py_node(
+                root,
+                "nodes/tag_localizer_node.py",
+                {
+                    "tags_yaml": _expand(tag.get("tags_yaml", ""), root),
+                    "color_topic": realsense.get("color_topic", "/camera/camera/color/image_raw"),
+                    "camera_info_topic": realsense.get("color_info_topic", "/camera/camera/color/camera_info"),
+                    "pose_topic": tag.get("pose_topic", "/tag_localizer/pose"),
+                    "status_topic": tag.get("status_topic", "/tag_localizer/status"),
+                    "seen_tags_topic": tag.get("seen_tags_topic", "/tag_localizer/seen_tags"),
+                    "frame_id": tag.get("frame_id", "map"),
+                    "detect_hz": tag.get("detect_hz", 10.0),
+                    "min_decision_margin": tag.get("min_decision_margin", 12.0),
+                },
+                "tag_localizer_node",
+            )
+        )
     actions.append(
         _py_node(
             root,
             "nodes/waypoint_navigator.py",
             {
                 "waypoints_yaml": _expand(slam.get("waypoints_yaml", ""), root),
-                "pose_topic": slam.get("pose_topic", "/camera_pose"),
+                # Navigator consumes the watchdog-fused pose (SLAM with AprilTag fallback).
+                "pose_topic": slam.get("fused_pose_topic", "/camera_pose_fused"),
                 "pose_type": slam.get("pose_type", "pose_stamped"),
                 "goal_topic": nav.get("goal_topic", "/waypoint/goal"),
                 "status_topic": nav.get("status_topic", "/waypoint/status"),
