@@ -30,14 +30,13 @@ realsense:
     align_depth.enable:=true
 
 orbslam3:
-  # Adjust this command if your ORB-SLAM3 ROS wrapper uses another executable
-  # name or a different map-loading flag. The launch file still applies the
-  # required RGB-D topic remaps below.
+  # 地图通过 settings yaml 的 System.LoadAtlasFromFile 加载（如 guosai_rgbd_map_v4），
+  # 不要在此传第 3 个 .osa 参数——rgbd wrapper 只接受 vocab + settings 两个位置参数，
+  # 多传的 .osa 会被误当 session 文件，导致 pose 恒为 0（tracking 未建立/地图未正确加载）。
   command: >-
     ros2 run orbslam3 rgbd
     ${GUOSAI_ROOT}/controller/ORB_SLAM3/Vocabulary/ORBvoc.txt
     /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_localization_v4.yaml
-    /home/jetson/Desktop/guosai/slam_maps/guosai_rgbd_map_v4.osa
     --ros-args
     -r /camera/color/image_raw:=/camera/camera/color/image_raw
     -r /camera/aligned_depth_to_color/image_raw:=/camera/camera/aligned_depth_to_color/image_raw
