@@ -421,3 +421,65 @@ tail -5 /tmp/arm_control.log
 **Jetson 跑通机械臂 = SDK 直连能通信 + 12V 真正接通 + 正确的 ROS 节点启动方式 + 准确的命令格式。**
 
 最大陷阱：**VIN 4.1V 一直存在不代表舵机有电**，一定要确保 12V 真正接到控制板舵机电源输入。
+
+---
+
+## 八、Jetson 重启后必做的 3 件事（每次开机/重启都要做）
+
+> ⚠️ **这是 Jetson 机械臂的固定前置步骤**——不跑这 3 步，机械臂完全无法工作。
+
+### 1. CH340 USB 重新插拔（必须）
+
+Jetson 重启后**控制板的 CH340 USB 不会自动重新枚举**——除非 12V 接通后**物理重插 USB 数据线两端**。
+
+```bash
+# 步骤：拔掉 Jetson 端的 USB 数据线 → 等 5 秒 → 重新插紧
+# 等 10 秒让 Jetson 重新枚举
+lsusb | grep 1a86:7523   # 确认 CH340 出现
+```
+
+### 2. CH340 驱动加载（仅当 lsmod 没显示时）
+
+```bash
+lsmod | grep ch34x
+# 没显示 → sudo modprobe ch34x
+```
+
+### 3. /dev/ttyUSB0 权限修改（**每次必须**）
+
+Jetson 重启后 udev 会重置串口设备权限为 `crw-rw---- root:dialout`——**jetson 用户不能访问**。
+
+```bash
+sudo chmod 666 /dev/ttyUSB0
+ls -l /dev/ttyUSB0   # 应显示 crw-rw-rw-
+```
+
+### 验证机械臂就绪
+
+```bash
+# 1. SDK 快速测试（VIN 必须 12000+ mV 才是 12V 接通）
+/usr/bin/python3 -c "
+import sys; sys.path.insert(0,'/home/jetson')
+from ros_robot_controller_sdk import Board
+import time
+b = Board('/dev/ttyUSB0', 1000000, timeout=2); b.enable_reception(True); time.sleep(0.5)
+v = b.bus_servo_read_vin(1)[0]
+if v > 10000:
+    print(f'[OK] VIN={v} mV (12V 接通)')
+else:
+    print(f'[!!] VIN={v} mV (12V 没接)')
+"
+
+# 2. SDK 发 home 命令验证舵机响应
+/usr/bin/python3 -c "
+import sys; sys.path.insert(0,'/home/jetson')
+from ros_robot_controller_sdk import Board
+import time
+b = Board('/dev/ttyUSB0', 1000000, timeout=2); b.enable_reception(True); time.sleep(0.5)
+b.bus_servo_set_position(3.0, [(1, 512), (2, 500), (3, 200), (4, 350), (5, 522)])
+time.sleep(5)
+print('5 舵机位置:')
+for i in range(1, 6):
+    print(f'  servo {i}: {b.bus_servo_read_position(i)[0]}')
+"
+```
