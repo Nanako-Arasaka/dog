@@ -64,36 +64,49 @@ def load_cjk_font(size: int):
 
 
 def generate_marker(tag_id: int, side_pixels: int) -> np.ndarray:
-    """生成单个 tag 的灰度图（0/255 uint8），标准 AprilTag 极性（白底黑框、黑格=数据1）。
+    """生成单个 tag 的灰度图（0/255 uint8），标准 AprilTag 极性。
 
-    ⚠️ 关键：OpenCV `generateImageMarker` 对 DICT_APRILTAG_36h11 输出的是
-    "黑底白框、内部白格=数据1"（OpenCV 极性）。官方 apriltag 库（现场主后端）
-    期望的是标准 AprilTag："白底黑框、内部黑格=数据1"。直接打印 OpenCV 输出
-    会导致官方 apriltag 库检测不到。
+    ⚠️ v2 修复（先前 ds 的版本是错的）：
+    旧版曾对内部 6x6 做反色，理由是误以为 OpenCV `generateImageMarker` 对
+    DICT_APRILTAG_36h11 输出"OpenCV 反极性"（黑底白框、白格=数据1），需再反一次
+    才能给官方 apriltag 库用。**这是错的**——OpenCV 4.6+/5.x 的输出本身就是
+    标准 AprilTag 极性：1 cell 黑边（外圈）、内部 6x6 数据位 black=data1 / white=data0。
+    反色后 OpenCV detectMarkers 立刻从 [tag_id] → []（亲测），官方 apriltag 库同理。
 
-    修复：只反色内部 6x6 数据格，保留外圈 1 cell 黑边，得到标准极性图。
-    OpenCV 自带 detectMarkers 对标准极性返回 None（极性反），反过来证明是标准布局。
+    所以：直接 `generateImageMarker(..., borderBits=1)`，不要再做任何反色。
+    现场主后端（官方 apriltag 库）和降级后端（OpenCV ArUco）都直接可读。
+
+    ⚠️ side_pixels 必须整除 8（10 cell 总宽下也行——`h // 8` 仍等于 cell 像素数，
+    因为 10 和 8 的最小公倍数整除 h 时值相同），否则 cell 边界与 OpenCV 位渲染错位。
     """
+    side_pixels = (int(side_pixels) // 8) * 8
+    if side_pixels <= 0:
+        side_pixels = 8
     dictionary = cv2.aruco.getPredefinedDictionary(DICT)
     marker = cv2.aruco.generateImageMarker(dictionary, tag_id, side_pixels, borderBits=1)
-    cell = side_pixels // 8
-    inner = slice(cell, -cell)
-    marker[inner, inner] = 255 - marker[inner, inner]
     return marker
 
 
 def self_verify(marker: np.ndarray, tag_id: int) -> bool:
-    """布局自检：标准 AprilTag 应为「白底黑框、内部有黑有白」。
+    """布局自检：直接用 OpenCV detectMarkers 读 marker，看能否返回正确 ID。
 
-    OpenCV detectMarkers 对标准极性返回 None（极性反），不能用 detect 验证；
-    改为检查 4 角黑 + 内部有黑有白。
+    detectMarkers 需要 marker 周围有白色静区才稳定识别，先 pad 2 cell 再检测。
+    这是唯一权威的"位图正确"判据（仅检查"4 角黑+内部有黑有白"分不清标准极性 vs
+    反色——两种都满足，但只有标准极性检测器才读得到）。
     """
     h = marker.shape[0]
     cell = h // 8
-    if not (marker[0, 0] == 0 and marker[0, -1] == 0 and marker[-1, 0] == 0 and marker[-1, -1] == 0):
+    pad = cell * 2
+    padded = cv2.copyMakeBorder(marker, pad, pad, pad, pad,
+                                 cv2.BORDER_CONSTANT, value=255)
+    dictionary = cv2.aruco.getPredefinedDictionary(DICT)
+    params = cv2.aruco.DetectorParameters()
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    detector = cv2.aruco.ArucoDetector(dictionary, params)
+    det = detector.detectMarkers(padded)
+    if det[1] is None:
         return False
-    inner = marker[cell:-cell, cell:-cell]
-    return bool((inner == 0).any() and (inner == 255).any())
+    return int(tag_id) in det[1].flatten().tolist()
 
 
 def add_quiet_zone(marker: np.ndarray, quiet_cells: int) -> np.ndarray:
@@ -107,69 +120,83 @@ def add_quiet_zone(marker: np.ndarray, quiet_cells: int) -> np.ndarray:
 
 
 def render_tag_png(tag_id: int, size_cm: float, dpi: int = 300) -> Path:
-    """生成单个 tag 的打印版 PNG，返回路径。"""
+    """生成单个 tag 的 A4 满版打印 PNG。
+
+    ⚠️ 打印方式：必须按「实际尺寸 / 100%」打印（不勾选"适应页面"缩放），
+    这样 tag 黑框物理边长 = size_cm，与 tags.yaml 的 size_m 一致，PnP 尺度才正确。
+    """
     name = TAG_NAMES.get(tag_id, f"tag {tag_id}")
-    # tag 图案物理边长 size_cm，8x8 格
-    tag_px = int(round(size_cm / 2.54 * dpi))
+    a4_w, a4_h = int(21.0 / 2.54 * dpi), int(29.7 / 2.54 * dpi)  # A4 @ dpi
+    # tag_px 必须整除 8（generate_marker 内部对齐），避免 cell 浮点边界
+    tag_px = max(8, (int(round(size_cm / 2.54 * dpi)) // 8) * 8)
     marker = generate_marker(tag_id, tag_px)
     ok = self_verify(marker, tag_id)
     if not ok:
         print(f"[警告] tag {tag_id} 布局自检失败，请检查 OpenCV 版本/字典")
 
-    img = add_quiet_zone(marker, quiet_cells=2)
-
-    # 底部标签区（白底 + 文字）
-    label_h = int(round(tag_px * 0.28))
-    canvas = np.full((img.shape[0] + label_h, img.shape[1]), 255, dtype=np.uint8)
-    canvas[: img.shape[0], :] = img
+    # 画布：A4 白底；tag 居中偏上，四周留白做静区；底部标签
+    canvas = np.full((a4_h, a4_w), 255, dtype=np.uint8)
+    margin_x = (a4_w - tag_px) // 2
+    top = int(a4_h * 0.10)
+    canvas[top:top + tag_px, margin_x:margin_x + tag_px] = marker
 
     pil = Image.fromarray(canvas)
     draw = ImageDraw.Draw(pil)
-    font_id = load_cjk_font(max(24, int(tag_px * 0.06)))
-    font_sub = load_cjk_font(max(18, int(tag_px * 0.04)))
-    cx = canvas.shape[1] / 2
-    draw.text((cx, img.shape[0] + label_h * 0.22), f"tag36h11 #{tag_id}", font=font_id, fill=0, anchor="mm")
-    draw.text((cx, img.shape[0] + label_h * 0.62), f"{name}  ({size_cm:.0f}cm)", font=font_sub, fill=80, anchor="mm")
+    font_id = load_cjk_font(int(a4_w * 0.028))
+    font_sub = load_cjk_font(int(a4_w * 0.020))
+    label_y = top + tag_px + int(a4_h * 0.045)
+    cx = a4_w / 2
+    draw.text((cx, label_y), f"tag36h11 #{tag_id}", font=font_id, fill=0, anchor="mm")
+    draw.text((cx, label_y + int(a4_h * 0.035)), f"{name}  ({size_cm:.0f}cm)", font=font_sub, fill=80, anchor="mm")
 
     out = OUT_DIR / f"tag36_11_{tag_id:05d}.png"
     pil.save(out, dpi=(dpi, dpi))
     return out
 
 
-def render_a4_pdf(tag_ids: list[int]) -> Path:
-    """10 个 tag 拼一页 A4 的核对版 PDF。"""
+def render_a4_pdf(tag_ids: list[int], size_cm: float = 4.0) -> Path:
+    """10 个 tag 拼成 2 页 A4 的紧凑贴附版（每页 5 个，tag 约 size_cm 边长）。
+
+    适合现场 tag 离狗近（<2m）的位点；远距离点位请用独立 A4 PNG（18cm）。
+
+    ⚠️ size_cm 默认 4cm：A4 宽 21cm，5 tag 横向需各 ≤ 4cm + 留白才能放下，
+    旧默认 8cm 会让 tag 互相重叠贴边、检测失败。
+    """
     a4 = (2480, 3508)  # 300 dpi A4
     cols, rows = 5, 2
     cell_w, cell_h = a4[0] // cols, a4[1] // rows
-    page = Image.new("L", a4, 255)
-    draw = ImageDraw.Draw(page)
-    font = load_cjk_font(48)
+    pages = []
+    font = load_cjk_font(56)
+    font_sub = load_cjk_font(40)
 
-    dictionary = cv2.aruco.getPredefinedDictionary(DICT)
-    for idx, tag_id in enumerate(tag_ids):
-        r, c = divmod(idx, cols)
-        marker = generate_marker(tag_id, 520)
-        marker = add_quiet_zone(marker, 2)
-        m = Image.fromarray(marker)
-        # 缩放到 cell 内居中
-        scale = min((cell_w - 160) / marker.shape[1], (cell_h - 260) / marker.shape[0])
-        mw, mh = int(marker.shape[1] * scale), int(marker.shape[0] * scale)
-        m = m.resize((mw, mh), Image.LANCZOS)
-        x0 = c * cell_w + (cell_w - mw) // 2
-        y0 = r * cell_h + 120
-        page.paste(m, (x0, y0))
-        label = f"#{tag_id}  {TAG_NAMES.get(tag_id, '')}"
-        draw.text((c * cell_w + cell_w // 2, y0 + mh + 60), label, font=font, fill=0, anchor="mm")
+    for page_idx in range(2):
+        page = Image.new("L", a4, 255)
+        draw = ImageDraw.Draw(page)
+        for slot in range(5):
+            idx = page_idx * 5 + slot
+            if idx >= len(tag_ids):
+                break
+            tag_id = tag_ids[idx]
+            marker = generate_marker(tag_id, int(size_cm / 2.54 * 300))
+            m = Image.fromarray(marker)
+            x0 = slot * cell_w + (cell_w - m.width) // 2
+            y0 = 200
+            page.paste(m, (x0, y0))
+            label = f"#{tag_id}  {TAG_NAMES.get(tag_id, '')}"
+            draw.text((slot * cell_w + cell_w // 2, y0 + m.height + 80), label, font=font, fill=0, anchor="mm")
+            draw.text((slot * cell_w + cell_w // 2, y0 + m.height + 190),
+                      f"{size_cm:.0f}cm tag", font=font_sub, fill=120, anchor="mm")
+        pages.append(page)
 
-    out = OUT_DIR / "tag36h11_all_A4.pdf"
-    page.save(out, "PDF", resolution=300.0)
+    out = OUT_DIR / "tag36h11_A4_2pages.pdf"
+    pages[0].save(out, "PDF", resolution=300.0, save_all=True, append_images=pages[1:])
     return out
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="生成 AprilTag tag36h11 打印版")
     parser.add_argument("--ids", default="1,2,3,4,5,6,7,8,9,10", help="逗号分隔的 tag id")
-    parser.add_argument("--size-cm", type=float, default=20.0, help="tag 黑框边长（cm），默认 20")
+    parser.add_argument("--size-cm", type=float, default=18.0, help="tag 黑框边长（cm），默认 18（A4 内最大）")
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -182,13 +209,16 @@ def main() -> int:
         paths.append(p)
         print(f"  ✓ {p.name}  ({TAG_NAMES.get(tid, '')})")
 
-    pdf = render_a4_pdf(tag_ids)
-    print(f"  ✓ {pdf.name}  (A4 核对版)")
+    pdf = render_a4_pdf(tag_ids, size_cm=4.0)
+    print(f"  ✓ {pdf.name}  (2 页 A4，紧凑贴附版，tag 4cm)")
 
     print("\n打印提示：")
-    print(f"  1. 独立 PNG 按 100% 比例打印，tag 黑框边长 = {args.size_cm:.0f}cm")
-    print("  2. 打印后裁剪，tag 四周务必保留白色静区（已内置 2 格）")
+    print(f"  1. 独立 A4 PNG：打印机选「实际尺寸 / 100%」（切勿勾选适应页面缩放），")
+    print(f"     打印出来 tag 黑框边长 = {args.size_cm:.0f}cm，与 config/tags.yaml 的 size_m 一致")
+    print(f"     （缩放会导致 PnP 位姿尺度错误，务必按实际尺寸打）")
+    print("  2. 裁剪后 tag 四周保留白色静区（A4 版已内置，四周留白即静区）")
     print("  3. 贴墙面/立柱时 tag 正面正对狗来向，高度≈相机高度，避开强光直射")
+    print(f"  4. 若改了 --size-cm，必须同步改 config/tags.yaml 的 size_m")
     return 0
 
 

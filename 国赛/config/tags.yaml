@@ -19,71 +19,73 @@
 #
 # 字段：
 #   id       —— tag36h11 家族 ID（0~586）
-#   size_m   —— tag 物理边长（m），默认 0.20（A4 纸打印图案约 15~20cm）
+#   size_m   —— tag 黑框物理边长（m）。与 output/apriltags 打印件一致：
+#               A4 300DPI 100% 缩放打印时黑框 = 17.95cm ≈ 0.18。
+#               打印后用尺实测黑框边长，若偏差 >2mm 需同步修改本字段！
 #   world    —— tag 中心在 SLAM 世界系的 6DoF 位姿（x/y/z 米，角度度）
 #   name     —— 语义名（对应场地定位点）
 #   note     —— 备注
 
 tag_family: tag36h11
-default_size_m: 0.20
+default_size_m: 0.18
 
 tags:
   - id: 1
     name: "点一"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "出发区右侧 - 对应 start_exit 附近"
 
   - id: 2
     name: "点二"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "出发区中央"
 
   - id: 3
     name: "点三"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "出发区左侧 - 收尾路径路标"
 
   - id: 4
     name: "点四"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "仪表箱1 观察侧2 - inspection_box_1_side_2"
 
   - id: 5
     name: "点五"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "仪表箱1 观察侧1 - inspection_box_1_side_1"
 
   - id: 6
     name: "点六"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "障碍区入口 - obstacle_entry"
 
   - id: 7
     name: "点七"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "障碍区出口 - obstacle_exit（优先级最高，锥桶漂移救援）"
 
   - id: 8
     name: "点八"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "仪表箱2 观察侧（归属待现场确认）"
 
   - id: 9
     name: "点九"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "抓取区接近点 - pick_area"
 
   - id: 10
     name: "点十"
-    size_m: 0.20
+    size_m: 0.18
     world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
     note: "放置区接近点 - place_A/B/C/D"

@@ -247,7 +247,15 @@ class OpenCVAprilTagBackend(AprilTagBackend):
             self.aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, name))
         except AttributeError:
             raise RuntimeError(f"OpenCV does not support {name}, need opencv>=4.6")
-        self.params = cv2.aruco.DetectorParameters_create()
+        # 新版 OpenCV（>=4.10/5.x）移除了 DetectorParameters_create
+        factory = getattr(cv2.aruco, "DetectorParameters_create", None)
+        self.params = factory() if factory else cv2.aruco.DetectorParameters()
+        # 新版 OpenCV 同时移除了函数式 detectMarkers，优先用面向对象的 ArucoDetector
+        self._detector = (
+            cv2.aruco.ArucoDetector(self.aruco_dict, self.params)
+            if hasattr(cv2.aruco, "ArucoDetector")
+            else None
+        )
         self._camera_matrix: Optional[np.ndarray] = None
         self._dist_coeffs = np.zeros(5)
 
@@ -257,7 +265,10 @@ class OpenCVAprilTagBackend(AprilTagBackend):
         if K is None:
             fx, fy, cx, cy = camera_params
             K = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=float)
-        corners, ids, _ = cv2.aruco.detectMarkers(gray, self.aruco_dict, parameters=self.params)
+        if self._detector is not None:
+            corners, ids, _ = self._detector.detectMarkers(gray)
+        else:
+            corners, ids, _ = cv2.aruco.detectMarkers(gray, self.aruco_dict, parameters=self.params)
         out: list[Detection] = []
         if ids is None:
             return out
