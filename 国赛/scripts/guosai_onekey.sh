@@ -262,7 +262,7 @@ collect_waypoints() {
     --stable-samples 10 \
     --stable-max-position-step 0.04 \
     --stable-max-yaw-step 0.18 \
-    --timeout-sec 20
+    --timeout-sec 20 2>&1 | tee "$log_dir/capture.stdout"
 }
 
 case "$MODE" in
