@@ -104,9 +104,11 @@ cone_avoidance:
   depth_info_topic: /camera/camera/aligned_depth_to_color/camera_info
 
 inspection:
+  # 正式链路用 7 类模型(live_detect.py + best_7class.pt)。
+  # 5 类版本(live_detect_yolo_opencv.py + best.pt)已淘汰——单独测试效果差。
   live_detect_command: >-
-    python3 live_detect_yolo_opencv.py
-    --model ${GUOSAI_ROOT}/best.pt
+    python3 live_detect.py
+    --model ${GUOSAI_ROOT}/best_7class.pt
     --camera-id 4
     --camera-path /dev/video4
     --no-gui

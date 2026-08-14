@@ -116,7 +116,7 @@ start_node task_manager_node \
   ros2 run arm_grasp task_manager_node --ros-args -p "config_path:=$CONFIG_PATH"
 
 start_node live_inspection \
-  python3 "$ROOT_DIR/live_detect_yolo_opencv.py"
+  python3 "$ROOT_DIR/live_detect.py"
 
 if [[ "$MODE" == "perception" || "$MODE" == "arm" ]]; then
   if [[ "${START_ASTRA:-0}" == "1" ]]; then

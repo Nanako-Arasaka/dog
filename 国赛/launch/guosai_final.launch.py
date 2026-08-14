@@ -226,7 +226,7 @@ def _setup(context, *args, **kwargs):
             ),
             _shell_process(
                 root,
-                _expand(inspection.get("live_detect_command", "python3 live_detect_yolo_opencv.py --no-gui --no-stream"), root),
+                _expand(inspection.get("live_detect_command", "python3 live_detect.py --model ${GUOSAI_ROOT}/best_7class.pt --no-gui --no-stream"), root),
                 "inspection_live_detect",
             ),
         ]

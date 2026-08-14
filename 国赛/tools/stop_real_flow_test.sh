@@ -7,7 +7,7 @@ PID_FILE="$LOG_DIR/pids.txt"
 
 stop_known_processes() {
   pkill -f "integration_bridge/bridge_node.py" 2>/dev/null || true
-  pkill -f "live_detect_yolo_opencv.py" 2>/dev/null || true
+  pkill -f "live_detect.py" 2>/dev/null || true
   pkill -f "arm_grasp/astra_camera_node.py" 2>/dev/null || true
   pkill -f "ros2 run arm_grasp inspection_memory_node" 2>/dev/null || true
   pkill -f "ros2 run arm_grasp task_manager_node" 2>/dev/null || true
