@@ -1,0 +1,90 @@
+# ============================================================
+# 机器狗国赛航点模板 (waypoints_TEMPLATE.yaml)
+# 使用说明：
+#   1. 把你在现场采集/测算的 (x, y, yaw) 填入下面各航点。
+#   2. 坐标系必须是 SLAM 建图锁定的地图帧（不是场地顶视图的米坐标）。
+#   3. 填完后，将本文件内容覆盖到 waypoints_FINAL.yaml
+#      （代码 / task_manager_node.py 只读取 FINAL 那一份）。
+#   4. 航点“名字”不能改，顺序无所谓；FSM 按固定逻辑切换。
+#   5. obstacle_entry / obstacle_exit 必须落在锥桶区 global_path
+#      起终点附近 (约 [0.2,0] → [5.8,0])，否则进/出障碍区会卡死。
+# ============================================================
+
+waypoints:
+  # —— 起点：离开出发区后第一个目标 ——
+  - name: start_exit
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— 锥桶障碍区入口（避让在此开启，须对齐 global_path 起点） ——
+  - name: obstacle_entry
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— 锥桶障碍区出口（避让在此关闭，须对齐 global_path 终点） ——
+  - name: obstacle_exit
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— 巡检箱 1 第 1 侧识别图 ——
+  - name: inspection_box_1_side_1
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— 巡检箱 1 第 2 侧识别图 ——
+  - name: inspection_box_1_side_2
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— 巡检箱 2 第 1 侧识别图 ——
+  - name: inspection_box_2_side_1
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— 巡检箱 2 第 2 侧识别图 ——
+  - name: inspection_box_2_side_2
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— 彩色柱状抓取区（机械臂取料点） ——
+  - name: pick_area
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— A 投放区（仅该项检测为异常时进入） ——
+  - name: place_A
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— B 投放区（仅该项检测为异常时进入） ——
+  - name: place_B
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— C 投放区（仅该项检测为异常时进入） ——
+  - name: place_C
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— D 投放区（仅该项检测为异常时进入） ——
+  - name: place_D
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+
+  # —— 终点：任务完成区 ——
+  - name: finish
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
