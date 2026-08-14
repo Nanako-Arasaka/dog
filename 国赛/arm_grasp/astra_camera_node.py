@@ -65,6 +65,11 @@ class AstraCameraNode(Node):
         self.camera_cy = float(self.declare_parameter('camera_cy', 240.0).value)
         # openni2 redist 路径（空=自动探测 ~/openni2/OpenNI-Linux-*/Redist 与 OPENNI2_REDIST）
         self.openni_redist = str(self.declare_parameter('openni_redist', '').value)
+        # openni 后端内参（默认=现场 OpenNI2 实测 640x480;get_camera_params 不可用时兜底,可现场标定修改）
+        self.openni_fx = float(self.declare_parameter('openni_fx', 945.028).value)
+        self.openni_fy = float(self.declare_parameter('openni_fy', 945.028).value)
+        self.openni_cx = float(self.declare_parameter('openni_cx', 320.0).value)
+        self.openni_cy = float(self.declare_parameter('openni_cy', 400.0).value)
         # realsense 转发后端的话题
         self.realsense_color_topic = str(self.declare_parameter(
             'realsense_color_topic', '/camera/camera/color/image_raw').value)
@@ -309,20 +314,47 @@ class AstraCameraNode(Node):
                 openni2.unload()
                 return None
             # 从驱动读深度内参（IR 视角；若已注册到 RGB 则接近 RGB 内参）
+            # 优先 SDK get_camera_params，但必须过合理性校验（现场实测该 API 曾返回
+            # 异常 cx=640），失败则回退显式参数 openni_fx/fy/cx/cy（默认=现场实测值）。
+            sdk_intrinsics = None
             try:
                 params = depth.get_camera_params()
-                fx = float(params.fx)
-                fy = float(params.fy)
-                cx = float(params.cx)
-                cy = float(params.cy)
-                if fx > 0:
+                sdk_intrinsics = (
+                    float(params.fx), float(params.fy), float(params.cx), float(params.cy)
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().warn(f'get_camera_params 失败: {exc}，回退参数内参')
+            if sdk_intrinsics is not None:
+                fx, fy, cx, cy = sdk_intrinsics
+                w = frame.width
+                h = frame.height
+                # 主点合理范围:cx 应接近图像中心(cy=400 是 Astra IR 传感器稳定特性,放宽上限)
+                plausible = (
+                    fx > 100.0 and fy > 100.0
+                    and w * 0.2 <= cx <= w * 0.8
+                    and h * 0.1 <= cy <= h * 0.95
+                )
+                if plausible:
                     self.camera_fx, self.camera_fy = fx, fy
                     self.camera_cx, self.camera_cy = cx, cy
                     self.get_logger().info(
-                        'OpenNI2 内参 fx=%.2f fy=%.2f cx=%.2f cy=%.2f', fx, fy, cx, cy
+                        f'OpenNI2 SDK 内参 fx={fx:.2f} fy={fy:.2f} cx={cx:.2f} cy={cy:.2f}'
                     )
-            except Exception:  # noqa: BLE001
-                pass
+                else:
+                    self.get_logger().warn(
+                        f'OpenNI2 SDK 内参不合理 fx={fx:.1f} cx={cx:.1f} cy={cy:.1f}'
+                        f'（图像 {w}x{h}），回退参数内参'
+                    )
+                    sdk_intrinsics = None
+            if sdk_intrinsics is None:
+                self.camera_fx = self.openni_fx
+                self.camera_fy = self.openni_fy
+                self.camera_cx = self.openni_cx
+                self.camera_cy = self.openni_cy
+                self.get_logger().info(
+                    f'OpenNI2 使用参数内参 fx={self.openni_fx:.2f} fy={self.openni_fy:.2f} '
+                    f'cx={self.openni_cx:.2f} cy={self.openni_cy:.2f}'
+                )
 
             def read():
                 try:

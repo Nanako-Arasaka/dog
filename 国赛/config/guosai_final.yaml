@@ -136,6 +136,10 @@ arm:
   depth_index: -1                 # UVC 深度设备号，-1=默认 camera_index+1
   fake_depth_fallback: false      # 深度不可用时禁止回退伪深度（正式比赛必须 false）
   openni_redist: ""               # OpenNI2 Redist 路径（空=自动探测 ~/openni2/OpenNI-Linux-*/Redist）
+  openni_fx: 945.028              # openni 后端内参（现场 OpenNI2 实测;get_camera_params 不可用时的兜底）
+  openni_fy: 945.028
+  openni_cx: 320.0
+  openni_cy: 400.0
   # realsense 转发后端（Astra 深度不可用时的首选兜底：复用巡检 RealSense 深度）
   realsense_color_topic: /camera/camera/color/image_raw
   realsense_depth_topic: /camera/camera/aligned_depth_to_color/image_raw
