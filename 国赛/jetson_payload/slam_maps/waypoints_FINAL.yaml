@@ -1,65 +1,53 @@
 waypoints:
-  - name: start_exit
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: obstacle_entry
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: obstacle_exit
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: inspection_box_1_side_1
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: inspection_box_1_side_2
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: inspection_box_2_side_1
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: inspection_box_2_side_2
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: pick_area
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: place_A
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: place_B
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: place_C
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: place_D
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-
-  - name: finish
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
+- name: start_exit
+  x: 0.144447
+  y: 0.003532
+  yaw: 0.004019
+- name: obstacle_entry
+  x: 0.145072
+  y: 0.002342
+  yaw: 0.003995
+- name: obstacle_exit
+  x: 0.969817
+  y: -0.037304
+  yaw: 0.01246
+- name: inspection_box_1_side_1
+  x: 0.06233
+  y: 0.00011
+  yaw: 0.014252
+- name: inspection_box_1_side_2
+  x: -0.173015
+  y: -0.05457
+  yaw: -3.073483
+- name: inspection_box_2_side_1
+  x: 1.654732
+  y: -0.01959
+  yaw: -0.166544
+- name: inspection_box_2_side_2
+  x: 2.130676
+  y: -0.104027
+  yaw: -0.048944
+- name: pick_area
+  x: -0.047492
+  y: 0.01836
+  yaw: -0.032135
+- name: place_A
+  x: 1.931314
+  y: 0.010455
+  yaw: -0.027884
+- name: place_B
+  x: 1.934594
+  y: 0.010428
+  yaw: -0.032773
+- name: place_C
+  x: 0.015494
+  y: 0.006338
+  yaw: -0.002123
+- name: place_D
+  x: 0.016676
+  y: -0.002042
+  yaw: 0.002713
+- name: finish
+  x: -0.317833
+  y: -0.009304
+  yaw: -0.012016
