@@ -92,8 +92,16 @@ cone_avoidance:
   model: ${GUOSAI_ROOT}/cone_avoidance/scripts/cone_yolo_best.pt
   camera: "0"
   conf: 0.35
-  send_hz: 8.0
+  send_hz: 10.0
   no_display: true
+  # --- LocalPlanner 引导式避障（方案甲，正式链路）---
+  # global_path 锚点（障碍区 起始/中间/末尾 3 个 AprilTag 坐标，标定后填入）
+  # 与 obstacle_zone_rect（边界约束）定义在 competition_map.yaml
+  control_yaml: ${GUOSAI_ROOT}/cone_avoidance/config/control.yaml
+  map_config: ${GUOSAI_ROOT}/cone_avoidance/competition_map.yaml
+  pose_topic: /camera_pose_fused        # 用 watchdog 融合位姿（SLAM + AprilTag 兜底）
+  depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+  depth_info_topic: /camera/camera/aligned_depth_to_color/camera_info
 
 inspection:
   live_detect_command: >-
