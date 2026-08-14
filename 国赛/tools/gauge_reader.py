@@ -230,8 +230,11 @@ class GaugeReader:
     def _choose_pointer(self, lines: Any, cx: float, cy: float, radius: float) -> tuple[float, float, float] | None:
         if lines is None:
             return None
+        import numpy as np
+        # OpenCV 4.x 返回 (N,1,4), 5.x 返回 (N,4); 统一 reshape 兼容
+        lines = np.atleast_2d(np.asarray(lines)).reshape(-1, 4)
         best: tuple[float, float, float] | None = None
-        for line in lines[:, 0, :]:
+        for line in lines:
             x1, y1, x2, y2 = [float(v) for v in line]
             d1 = math.hypot(x1 - cx, y1 - cy)
             d2 = math.hypot(x2 - cx, y2 - cy)

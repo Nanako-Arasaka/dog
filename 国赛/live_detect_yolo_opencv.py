@@ -339,15 +339,25 @@ def clamp_box(box: tuple[int, int, int, int], width: int, height: int) -> tuple[
     return x1, y1, x2, y2
 
 
-def predict_with_fallback(model: YOLO, frame, use_half: bool):
+def _resolve_device() -> str:
+    """Jetson 上有 GPU 用 cuda:0,否则回退 CPU(本地调试)。"""
     try:
-        results = model.predict(frame, imgsz=IMG_SIZE, conf=CONF_THRES, device=0, half=use_half, verbose=False)
+        import torch
+        return "cuda:0" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
+
+
+def predict_with_fallback(model: YOLO, frame, use_half: bool):
+    device = _resolve_device()
+    try:
+        results = model.predict(frame, imgsz=IMG_SIZE, conf=CONF_THRES, device=device, half=use_half, verbose=False)
         return results, use_half
     except Exception as exc:
         if use_half:
             print("[WARNING] YOLO half=True failed, fallback to half=False")
             print(f"[WARNING] {exc}")
-            results = model.predict(frame, imgsz=IMG_SIZE, conf=CONF_THRES, device=0, half=False, verbose=False)
+            results = model.predict(frame, imgsz=IMG_SIZE, conf=CONF_THRES, device=device, half=False, verbose=False)
             return results, False
         raise
 
@@ -506,6 +516,16 @@ def main() -> None:
                     draw_text_with_background(frame, f"{class_name} {conf:.2f}", x1, y1, color)
 
             if best_zone is not None:
+                # 区域切换:清空仪表历史,防止上一区域的读数串到新区域误报
+                if best_zone != last_zone:
+                    status_history.clear()
+                    unknown_counter["count"] = 0
+                    last_gauge_result = {
+                        "angle": None,
+                        "status": "unknown",
+                        "success": False,
+                        "status_source": "unknown",
+                    }
                 last_zone = best_zone
                 last_zone_conf = best_zone_conf
 

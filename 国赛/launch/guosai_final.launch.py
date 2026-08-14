@@ -236,7 +236,12 @@ def _setup(context, *args, **kwargs):
             _py_node(
                 root,
                 "arm_grasp/astra_camera_node.py",
-                {"camera_index": 0},
+                {
+                    "camera_index": int(arm.get("camera_index", 0)),
+                    "depth_mode": arm.get("depth_mode", "auto"),
+                    "depth_index": int(arm.get("depth_index", -1)),
+                    "fake_depth_fallback": _bool_text(arm.get("fake_depth_fallback", False)),
+                },
                 "astra_camera_node",
             ),
             _py_node(

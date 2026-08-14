@@ -653,7 +653,9 @@ def _detect_gauge_with_cv2(
     best: tuple[int, int, int, int, float] | None = None
     local_cx, local_cy = cx - x1, cy - y1
     if lines is not None:
-        for line in lines[:, 0, :]:
+        # OpenCV 4.x 返回 (N,1,4), 5.x 返回 (N,4); 统一 reshape 兼容
+        lines = np.atleast_2d(np.asarray(lines)).reshape(-1, 4)
+        for line in lines:
             lx1, ly1, lx2, ly2 = [int(v) for v in line]
             d1 = ((lx1 - local_cx) ** 2 + (ly1 - local_cy) ** 2) ** 0.5
             d2 = ((lx2 - local_cx) ** 2 + (ly2 - local_cy) ** 2) ** 0.5

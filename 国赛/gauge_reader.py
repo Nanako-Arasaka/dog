@@ -7,10 +7,21 @@ ROI; this code estimates the pointer angle and maps it to low/normal/high.
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 
 import cv2
 import numpy as np
+
+
+# 逐帧 DEBUG 打印开关：默认关闭，避免巡检主循环每帧刷屏（30fps 下每秒 100+ 行）。
+# 调试时设置环境变量 GAUGE_DEBUG=1 开启。
+DEBUG_PRINTS = os.environ.get("GAUGE_DEBUG", "").lower() in {"1", "true", "yes"}
+
+
+def _debug(*args: Any) -> None:
+    if DEBUG_PRINTS:
+        print(*args)
 
 
 # Fallback gauge angle thresholds for the current competition gauge.
@@ -121,15 +132,16 @@ def _status_from_color_bands(roi: Any, pointer_angle: float, cx: float, cy: floa
     red_span = _angle_span(red_angles)
     yellow_span = _angle_span(yellow_angles)
 
-    print(f"[DEBUG color_bands] annulus_px={annulus_pixels} red_px={red_pixels} yellow_px={yellow_pixels} "
-          f"red_angles_n={red_angles.size} yellow_angles_n={yellow_angles.size} "
-          f"pointer_angle={pointer_angle:.1f} circle=({cx:.0f},{cy:.0f}) r={radius:.0f} "
-          f"red_span={red_span} yellow_span={yellow_span}")
+    print_dbg = _debug
+    print_dbg(f"[DEBUG color_bands] annulus_px={annulus_pixels} red_px={red_pixels} yellow_px={yellow_pixels} "
+             f"red_angles_n={red_angles.size} yellow_angles_n={yellow_angles.size} "
+             f"pointer_angle={pointer_angle:.1f} circle=({cx:.0f},{cy:.0f}) r={radius:.0f} "
+             f"red_span={red_span} yellow_span={yellow_span}")
 
     high_hit = red_span is not None and _angle_in_span(pointer_angle, red_span, COLOR_BAND_EDGE_MARGIN_DEG)
     low_hit = yellow_span is not None and _angle_in_span(pointer_angle, yellow_span, COLOR_BAND_EDGE_MARGIN_DEG)
 
-    print(f"[DEBUG color_bands] high_hit={high_hit} low_hit={low_hit}")
+    print_dbg(f"[DEBUG color_bands] high_hit={high_hit} low_hit={low_hit}")
 
     if high_hit and not low_hit:
         return "high"
@@ -176,8 +188,11 @@ def _choose_pointer_line(lines: Any, cx: float, cy: float, radius: float) -> tup
     if lines is None:
         return None
 
+    # OpenCV 4.x 返回 (N,1,4), 5.x 返回 (N,4); 统一 reshape 兼容
+    lines = np.atleast_2d(np.asarray(lines)).reshape(-1, 4)
+
     best: tuple[float, float, float] | None = None
-    for raw in lines[:, 0, :]:
+    for raw in lines:
         x1, y1, x2, y2 = [float(v) for v in raw]
         d1 = math.hypot(x1 - cx, y1 - cy)
         d2 = math.hypot(x2 - cx, y2 - cy)
@@ -268,8 +283,8 @@ def read_gauge(gauge_roi: Any, debug: bool = False) -> dict[str, Any]:
         tip_x, tip_y = fallback
 
     angle = round(float(_angle_from_center(cx, cy, tip_x, tip_y)), 2)
-    print(f"[DEBUG read_gauge] circle_found={circle_found} cx={cx:.1f} cy={cy:.1f} radius={radius:.1f} "
-          f"roi_shape=({w},{h}) pointer_angle={angle}")
+    _debug(f"[DEBUG read_gauge] circle_found={circle_found} cx={cx:.1f} cy={cy:.1f} radius={radius:.1f} "
+           f"roi_shape=({w},{h}) pointer_angle={angle}")
 
     # ── status decision: color-band first, then angle fallback ──
     color_result = _status_from_color_bands(gauge_roi, angle, cx, cy, radius)
@@ -282,7 +297,7 @@ def read_gauge(gauge_roi: Any, debug: bool = False) -> dict[str, Any]:
         status_source = "angle"
         color_band_detected = False
 
-    print(f"[DEBUG read_gauge] status={status} source={status_source}")
+    _debug(f"[DEBUG read_gauge] status={status} source={status_source}")
 
     result: dict[str, Any] = {
         "angle": angle,

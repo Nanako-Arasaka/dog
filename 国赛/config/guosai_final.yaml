@@ -128,6 +128,11 @@ arm:
   feedback_topic: /arm/feedback
   max_retries: 3
   feedback_timeout_sec: 20.0
+  # --- Astra/Orbbec 抓取相机 ---
+  camera_index: 0                 # RGB 设备号（/dev/video0）
+  depth_mode: auto                # auto | pyorbbec | uvc | none（真实深度后端）
+  depth_index: -1                 # UVC 深度设备号，-1=默认 camera_index+1
+  fake_depth_fallback: false      # 深度不可用时禁止回退伪深度（正式比赛必须 false）
 
 voice_broadcast:
   enabled: true
