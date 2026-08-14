@@ -101,7 +101,9 @@ flowchart LR
 ## 核心模块
 
 **1. 巡检识别（40 分）**
-`main` 流程里 `live_detect_yolo_opencv.py` 用 YOLO 定位 5 类区域（zone_A/B/C/D + gauge），裁出仪表盘 ROI；`gauge_reader.py` 走经典 CV 管线读指针角度并判 `low/normal/high`：灰度 → 高斯模糊 → CLAHE → Canny → 霍夫圆 → 霍夫直线 → HSV 色带分类，每一级都有降级兜底。结果经 `integration_bridge` 冻结（每区 3 次一致）后发布。
+正式链路用 **7 类模型**（`live_detect.py` + `best_7class.pt`：zone_A/B/C/D + gauge_low/normal/high），状态直接来自 YOLO 分类 + 短窗口多数投票稳定（≥4/7 帧）；再用 `gauge_reader.py` 的 HSV 红色带检测做兜底纠正（YOLO 漏报 high 时）。`gauge_reader.py` 走经典 CV 管线读指针角度：灰度 → 高斯模糊 → CLAHE → Canny → 霍夫圆 → 霍夫直线 → HSV 色带分类，每一级都有降级兜底。稳定结果经 `BridgeInputPublisher` 发布到 `/bridge/inspection_result` + `/bridge/placement_zone`，由 `integration_bridge` 冻结（每区 3 次一致）后输出 `/inspection/all`（abnormal/normal）与 `/inspection/all_detailed`（保留 low/high，供语音区分偏低/偏高）。
+
+> 5 类版本（`live_detect_yolo_opencv.py` + `best.pt`）单独测试效果差，**已淘汰**，保留仅供历史参考。
 
 **2. 语音播报（决定巡检那 40 分能不能拿满）**
 `nodes/voice_broadcast_node.py` 订阅巡检结果，按 `A_低/正常/高` 等 12 种组合播放 `output/audio/` 下预生成的 wav。支持 `mock` / `aplay` / `ffplay` 三种引擎，现场用 `aplay` 驱动外置 USB 扬声器。
@@ -137,7 +139,8 @@ YOLO 检测锥桶（conf 0.35）→ 四级规则策略：紧急停车（面积 >
 ├── config/guosai_final.yaml        # 运行配置（SLAM/相机/导航/避障/巡检/机械臂/语音/FSM/tag）
 ├── config/tags.yaml                # AprilTag 定位点配置（10 个 tag 的世界位姿）
 ├── jetson_payload/                 # Jetson 部署包（FINAL SLAM 地图 + 上传脚本）
-├── live_detect_yolo_opencv.py      # 主线实时巡检：YOLO 定位 + OpenCV 读表
+├── live_detect.py                   # 主线实时巡检（7 类模型）：YOLO 状态 + 色带兜底 + bridge 发布
+├── live_detect_yolo_opencv.py      # 5 类版本（已淘汰，历史参考）
 ├── gauge_reader.py                 # 仪表盘指针角度读取（多层降级）
 ├── camera_input.py                 # 多输入源统一取流封装（mock/video/camera）
 ├── arm_grasp/                      # JetArm 六自由度机械臂 ROS2 包
@@ -242,6 +245,12 @@ python3 tools/calibrate_tags.py --self-test
 ## 当前状态与待办
 
 **已跑通（2026-08-12，Jetson 真机 dry-run）**：FSM 13 态端到端走完，5 个节点全部启动；preflight 代码类检查全部通过。剩下的都是现场动作：
+
+**视觉部分修复（2026-08-14，已合入 main）**：
+- 巡检正式链路切换为 **7 类模型**（`live_detect.py` + `best_7class.pt`），5 类版本淘汰；7 类入口补上 `/bridge/inspection_result` + `/bridge/placement_zone` 发布（`BridgeInputPublisher`）
+- `gauge_reader` 修复 OpenCV 5.x 下 HoughLinesP 结果索引崩溃（兼容 4.x/5.x）；逐帧 DEBUG 打印改为 `GAUGE_DEBUG=1` 控制
+- 机械臂抓取深度：`astra_camera_node` 由伪深度（恒 0.5m）改为**真实深度**（pyorbbecsdk → UVC Z16 自动探测），深度不可用时安全停止发布；**现场需 `pip install pyorbbecsdk` 后验证** `/vision/grasp_pose` 的 z 随距离正确
+- 详见 `docs/视觉部分可用性检查报告_20260814.md`
 
 - [ ] **航点采集**：`jetson_payload/slam_maps/waypoints_FINAL.yaml` 里坐标目前全是 `0.0`，必须现场 `bash scripts/guosai_onekey.sh collect` 采集真实航点后填入
 - [ ] **语音配置**：现场把 `voice_broadcast.engine` 设为 `aplay` 并指定 `device`
