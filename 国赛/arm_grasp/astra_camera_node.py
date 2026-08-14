@@ -6,12 +6,15 @@ RGB 仍通过 V4L2 UVC 读取；深度改为多后端真实获取，按顺序自
 
   1. pyorbbec  —— 官方 Orbbec Python SDK（最可靠，推荐现场安装）
                    Jetson 安装：pip install pyorbbecsdk
-  2. uvc       —— V4L2 Z16 深度流（RGB 的相邻 video 设备，如 /dev/video1）
+  2. openni    —— OpenNI2 + liborbbec 老驱动（Astra 真深度；绕开 pyorbbecsdk
+                   对 iSerial=0 设备的枚举 bug，现场实测可用）
+                   依赖: pip install openni + OPENNI2_REDIST(或自动探测 ~/openni2)
+  3. uvc       —— V4L2 Z16 深度流（RGB 的相邻 video 设备，如 /dev/video1）
                   部分 Orbbec 型号（Astra Pro/Pro Plus 等）UVC 模式暴露 Z16 深度
-  3. realsense —— 转发 RealSense 的 color + aligned depth + camera_info 到
+  4. realsense —— 转发 RealSense 的 color + aligned depth + camera_info 到
                    /rgbd_cam/*（抓取视觉复用，零额外依赖；前提：RealSense
                    视角覆盖机械臂工作台面，cam2arm 手眼标定按 RealSense 重做）
-  4. none      —— 后端全部不可用：默认【不再发布深度】，并循环报错提示。
+  5. none      —— 后端全部不可用：默认【不再发布深度】，并循环报错提示。
                    抓取侧 vision_node 会得到 invalid_depth → 不动作（安全，不会用假深度去抓）。
 
 行为变化（相对旧版伪深度 0.5m 常量）：
@@ -21,6 +24,9 @@ RGB 仍通过 V4L2 UVC 读取；深度改为多后端真实获取，按顺序自
 
 深度不可用时不会崩溃：节点继续发 RGB，深度话题停止发布/或按 fallback 开关处理。
 """
+
+import glob
+import os
 
 import rclpy
 from rclpy.node import Node
@@ -44,7 +50,7 @@ class AstraCameraNode(Node):
         # ── 参数 ──
         # 相机节点号（默认 0 = /dev/video0 = Orbbec RGB UVC）
         self.camera_index = self.declare_parameter('camera_index', 0).value
-        # 深度后端: auto | pyorbbec | uvc | realsense | none
+        # 深度后端: auto | pyorbbec | openni | uvc | realsense | none
         self.depth_mode = str(self.declare_parameter('depth_mode', 'auto').value).lower()
         # UVC 深度设备号（None → 默认 camera_index + 1）
         self.depth_index = self.declare_parameter('depth_index', -1).value
@@ -52,11 +58,13 @@ class AstraCameraNode(Node):
         self.depth_height = self.declare_parameter('depth_height', 480).value
         # 深度后端全部不可用时的兜底: true=发伪深度(仅调试), false=不发深度(安全)
         self.fake_depth_fallback = bool(self.declare_parameter('fake_depth_fallback', False).value)
-        # 相机内参（默认近似值；pyorbbec 后端可能从 SDK 读到更准的值）
+        # 相机内参（默认近似值；openni/pyorbbec 后端会从驱动读到更准的值）
         self.camera_fx = float(self.declare_parameter('camera_fx', 570.34).value)
         self.camera_fy = float(self.declare_parameter('camera_fy', 570.34).value)
         self.camera_cx = float(self.declare_parameter('camera_cx', 320.0).value)
         self.camera_cy = float(self.declare_parameter('camera_cy', 240.0).value)
+        # openni2 redist 路径（空=自动探测 ~/openni2/OpenNI-Linux-*/Redist 与 OPENNI2_REDIST）
+        self.openni_redist = str(self.declare_parameter('openni_redist', '').value)
         # realsense 转发后端的话题
         self.realsense_color_topic = str(self.declare_parameter(
             'realsense_color_topic', '/camera/camera/color/image_raw').value)
@@ -66,6 +74,7 @@ class AstraCameraNode(Node):
             'realsense_info_topic', '/camera/camera/color/camera_info').value)
 
         self.bridge = CvBridge()
+        self._openni2_state = None  # (device, depth_stream)，防止流对象被 GC 关闭
 
         # ── realsense 转发模式（不打开本地 V4L2，直接转发 RealSense 话题）──
         if self.depth_mode == 'realsense':
@@ -163,6 +172,14 @@ class AstraCameraNode(Node):
             if mode == 'pyorbbec':
                 self.get_logger().warn('pyorbbecsdk 不可用（未安装或无设备）')
                 return None
+        if mode == 'auto' or mode == 'openni':
+            fn = self._try_openni2()
+            if fn is not None:
+                self.get_logger().info('深度后端: openni2 (liborbbec)')
+                return fn
+            if mode == 'openni':
+                self.get_logger().warn('openni2 不可用（未安装或无设备）')
+                return None
         if mode == 'auto' or mode == 'uvc':
             fn = self._try_uvc_depth()
             if fn is not None:
@@ -237,6 +254,107 @@ class AstraCameraNode(Node):
             return read
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn('pyorbbecsdk 初始化失败: %s', exc)
+            return None
+
+    def _try_openni2(self):
+        """OpenNI2 + liborbbec 后端（Astra 真深度）。返回 ()=>np.uint16 深度帧 或 None。
+
+        依赖: pip install openni；OPENNI2_REDIST 环境变量或自动探测 ~/openni2。
+        若设备支持 image registration，尝试把深度注册到 RGB 视角（消除基线视差）。
+        """
+        try:
+            from openni import openni2
+        except ImportError:
+            return None
+
+        # 确保 OPENNI2_REDIST（环境变量 → 参数 → 自动探测 ~/openni2）
+        if not os.environ.get("OPENNI2_REDIST"):
+            redist = self.openni_redist
+            if not redist:
+                for base in glob.glob(os.path.expanduser("~/openni2/OpenNI-Linux-*")):
+                    candidate = os.path.join(base, "Redist")
+                    if os.path.isdir(candidate):
+                        redist = candidate
+                        break
+            if redist and os.path.isdir(redist):
+                os.environ["OPENNI2_REDIST"] = redist
+                self.get_logger().info(f'OPENNI2_REDIST -> {redist}')
+
+        try:
+            openni2.initialize()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn('openni2 initialize 失败: %s', exc)
+            return None
+        try:
+            dev = openni2.Device.open_any()
+        except Exception as exc:  # noqa: BLE001
+            openni2.unload()
+            self.get_logger().warn('openni2 未发现 Astra 设备: %s', exc)
+            return None
+
+        # 尝试深度注册到 RGB 视角（消除 40mm 基线视差；Astra 固件支持时生效）
+        try:
+            if hasattr(dev, "set_image_registration_mode"):
+                dev.set_image_registration_mode(True)
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            depth = dev.create_depth_stream()
+            depth.start()
+            frame = depth.read_frame()
+            if frame is None:
+                depth.stop()
+                dev.close()
+                openni2.unload()
+                return None
+            # 从驱动读深度内参（IR 视角；若已注册到 RGB 则接近 RGB 内参）
+            try:
+                params = depth.get_camera_params()
+                fx = float(params.fx)
+                fy = float(params.fy)
+                cx = float(params.cx)
+                cy = float(params.cy)
+                if fx > 0:
+                    self.camera_fx, self.camera_fy = fx, fy
+                    self.camera_cx, self.camera_cy = cx, cy
+                    self.get_logger().info(
+                        'OpenNI2 内参 fx=%.2f fy=%.2f cx=%.2f cy=%.2f', fx, fy, cx, cy
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+            def read():
+                try:
+                    f = depth.read_frame()
+                    if f is None:
+                        return None
+                    buf = f.get_buffer_as_uint16()
+                    if buf is None or len(buf) == 0:
+                        return None
+                    return np.frombuffer(buf, dtype=np.uint16).reshape(f.height, f.width)
+                except Exception:  # noqa: BLE001
+                    return None
+
+            first = read()
+            if first is None or first.size == 0:
+                depth.stop()
+                dev.close()
+                openni2.unload()
+                return None
+            self._openni2_state = (dev, depth)
+            return read
+        except Exception as exc:  # noqa: BLE001
+            try:
+                depth.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                dev.close()
+            except Exception:  # noqa: BLE001
+                pass
+            openni2.unload()
+            self.get_logger().warn('openni2 初始化失败: %s', exc)
             return None
 
     def _try_uvc_depth(self):
@@ -325,6 +443,13 @@ class AstraCameraNode(Node):
     def __del__(self):
         if hasattr(self, 'cap'):
             self.cap.release()
+        if self._openni2_state is not None:
+            try:
+                _dev, depth = self._openni2_state
+                depth.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._openni2_state = None
 
 
 def main():
