@@ -180,19 +180,26 @@ class VisionNode(Node):
         return objs
 
     def _sample_depth(self, cx, cy, radius=5):
-        """在 (cx,cy) 周围采样深度中值，避免噪声"""
+        """在 (cx,cy) 周围采样深度中值，避免噪声。
+
+        中心窗口无有效深度(0=饱和/无回波)时，逐级扩大搜索窗口重试，
+        取最近的有效深度。红条中心若为饱和 0，其本体/边缘通常仍有有效值。
+        """
         if self.depth_img is None:
             return 0
         h, w = self.depth_img.shape
-        x1 = max(0, cx - radius)
-        x2 = min(w, cx + radius + 1)
-        y1 = max(0, cy - radius)
-        y2 = min(h, cy + radius + 1)
-        roi = self.depth_img[y1:y2, x1:x2]
-        valid = roi[(roi > 0) & (roi < 2500)]
-        if len(valid) == 0:
-            return 0
-        return np.median(valid)
+        for r in (radius, 12, 20):
+            x1 = max(0, cx - r)
+            x2 = min(w, cx + r + 1)
+            y1 = max(0, cy - r)
+            y2 = min(h, cy + r + 1)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            roi = self.depth_img[y1:y2, x1:x2]
+            valid = roi[(roi > 0) & (roi < 2500)]
+            if len(valid) > 0:
+                return np.median(valid)
+        return 0
 
     def _to_arm_frame(self, cx, cy):
         """像素 → 相机坐标 → 机械臂基座坐标
@@ -244,7 +251,11 @@ class VisionNode(Node):
         best = objs[0]
         p_arm = self._to_arm_frame(best['cx'], best['cy'])
         if p_arm is None:
-            hint = '深度不可用且 fixed_depth 未启用' if not self.fixed_depth_enabled else '深度与 fixed_depth 均无效'
+            if not self.fixed_depth_enabled:
+                hint = ('深度不可用且 fixed_depth 未启用: 现场可在 grasp_config 填实测 depth_m '
+                        '后置 fixed_depth.enabled: true 兜底')
+            else:
+                hint = '深度与 fixed_depth 均无效'
             self.get_logger().warn(f'[视觉节点] 坐标无效({hint})')
             self.pub_pose.publish(String(data='invalid_depth'))
             return
@@ -259,9 +270,10 @@ class VisionNode(Node):
             self.pub_pose.publish(String(data='low_conf'))
             return
 
-        # 发布: arm坐标系抓取位姿 + 像素坐标
+        # 发布: arm坐标系抓取位姿 + 像素坐标 + z 来源(诊断)
+        # 格式 grasp|x|y|z|angle|conf|cx|cy|z_src;task_manager 只读 0-7,追加不破坏解析
         pose = (f'grasp|{gx:.4f}|{gy:.4f}|{gz_grasp:.4f}|'
-                f'{best["angle"]:.1f}|{conf:.2f}|{best["cx"]}|{best["cy"]}')
+                f'{best["angle"]:.1f}|{conf:.2f}|{best["cx"]}|{best["cy"]}|{self._last_z_source}')
         self.pub_pose.publish(String(data=pose))
         self.get_logger().info(f'[视觉节点] ★ 抓取位姿(arm系): x={gx:.3f} y={gy:.3f} '
                                f'z={gz_grasp:.3f} angle={best["angle"]:.0f}° conf={conf:.2f} '
