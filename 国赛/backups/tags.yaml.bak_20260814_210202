@@ -1,6 +1,4 @@
-# 由 tools/calibrate_tags.py 现场标定（2026-08-14，仅保留 tag 1+2+3；
-# tag 4/5/6 采集时 ORB-SLAM3 失跟，4 个点聚在 SLAM 原点 0.5m³ 内——同
-# 604c8c3 脏 waypoint 根因——已抹掉待重采）
+# 由 tools/calibrate_tags.py 于 2026-08-14 20:54:29 现场标定生成
 # 世界系 = ORB-SLAM3 建图时的世界系（与 /camera_pose 一致）
 # 手动改动前请先备份；重新标定直接再跑一次本工具即可
 tag_family: tag36h11
@@ -24,12 +22,12 @@ tags:
 - id: 4
   name: 点四
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: 0.1321, y: 0.1146, z: 0.6081, yaw_deg: -176.97, pitch_deg: -14.27, roll_deg: -6.6}
   note: 仪表箱1 观察侧2 - inspection_box_1_side_2
 - id: 5
   name: 点五
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: 0.133, y: 0.1211, z: 0.6112, yaw_deg: -177.18, pitch_deg: -10.71, roll_deg: -6.41}
   note: 仪表箱1 观察侧1 - inspection_box_1_side_1
 - id: 6
   name: 点六

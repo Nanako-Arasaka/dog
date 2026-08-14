@@ -1,6 +1,4 @@
-# 由 tools/calibrate_tags.py 现场标定（2026-08-14，仅保留 tag 1+2+3；
-# tag 4/5/6 采集时 ORB-SLAM3 失跟，4 个点聚在 SLAM 原点 0.5m³ 内——同
-# 604c8c3 脏 waypoint 根因——已抹掉待重采）
+# 由 tools/calibrate_tags.py 于 2026-08-14 19:57:53 现场标定生成
 # 世界系 = ORB-SLAM3 建图时的世界系（与 /camera_pose 一致）
 # 手动改动前请先备份；重新标定直接再跑一次本工具即可
 tag_family: tag36h11
@@ -9,17 +7,17 @@ tags:
 - id: 1
   name: 点一
   size_m: 0.18
-  world: {x: 0.083, y: -0.082, z: 0.7176, yaw_deg: 176.43, pitch_deg: 0.79, roll_deg: 51.8}
+  world: {x: 0.046, y: 0.0389, z: 0.5735, yaw_deg: -1.66, pitch_deg: -0.36, roll_deg: 128.68}
   note: 出发区右侧 - 对应 start_exit 附近
 - id: 2
   name: 点二
   size_m: 0.18
-  world: {x: -0.3694, y: -0.7073, z: 1.6528, yaw_deg: 166.68, pitch_deg: 10.13, roll_deg: 53.3}
+  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
   note: 出发区中央
 - id: 3
   name: 点三
   size_m: 0.18
-  world: {x: 0.403, y: -0.3012, z: 1.0009, yaw_deg: -148.09, pitch_deg: -35.45, roll_deg: 41.34}
+  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
   note: 出发区左侧 - 收尾路径路标
 - id: 4
   name: 点四

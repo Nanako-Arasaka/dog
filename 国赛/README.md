@@ -191,7 +191,7 @@ ros2 launch launch/guosai_final.launch.py
 | ORB 词汇 | `scripts/preflight_guosai_final.py` 优先用仓库内路径，缺失时回退 `/home/jetson/ORB_SLAM3/Vocabulary/ORBvoc.txt`（139 MB，不入库） |
 | 机械臂消息包 | `ros_robot_controller_msgs` 手动 cmake install 到 `arm_grasp/install/`；启动脚本已内置 `AMENT_PREFIX_PATH` / `PYTHONPATH` 注册 |
 | 语音引擎 | 现场把 `voice_broadcast.engine` 改为 `aplay` + `device: plughw:X,0`（外置 USB 扬声器）；空 device 已有兜底，不会因参数解析报错 |
-| AprilTag 兜底定位 | 现场需 `apt install libapriltag-dev` + `pip install apriltag`（JetPack 5 自带 OpenCV 4.5 无 AprilTag 字典，降级后端不可用）；贴好 10 个 tag 后用 `tools/calibrate_tags.py` 标定 → `--verify` 通过后把 `tag_localizer.enabled` 置 true |
+| AprilTag 兜底定位 | `apt install libapriltag-dev`（apt 已装 3.2.0，apt 装到 `/usr/lib/aarch64-linux-gnu/libapriltag.so`）→ **`pip uninstall -y apriltag && pip install dt-apriltags`**（⚠️ PyPI 上的 `apriltag` 是 Fraunhofer 纯 Python 阉割包装 v0.0.16，不支持 `quad_sigma` 等官方参数；代码里 import 别名为 `dt_apriltags`）；贴好 10 个 tag 后用 `tools/calibrate_tags.py` 标定 → `--verify` 通过后把 `tag_localizer.enabled` 置 true |
 
 > ⚠️ **已知配置坑**：`config/guosai_final.yaml` 里的 `slam.map_path` 目前仍指向旧的 `guosai_rgbd_map_v4.osa`，正式部署前需改成 `jetson_payload/slam_maps/guosai_rgbd_map_FINAL.osa`。
 

@@ -151,29 +151,42 @@ class AprilTagBackend:
 
 
 class AprilTagLibBackend(AprilTagBackend):
-    """官方 apriltag 库后端（精度最高）。"""
+    """dt-apriltags 后端（ctypes 绑到 /usr/lib/aarch64-linux-gnu/libapriltag.so，
+    真正的官方 April Robotics Lab C 库 Python binding）。
+
+    ⚠️ PyPI 上的同名 `apriltag` 是 Fraunhofer 纯 Python 阉割包装（v0.0.16），
+    不支持 quad_sigma 等官方 API 参数——必须用 `pip install dt-apriltags`。
+    命名陷阱详见 memory apriltag_naming_pitfall.md。
+    """
 
     def __init__(self, family: str) -> None:
         super().__init__(family)
-        import apriltag  # noqa: F401
+        import dt_apriltags  # noqa: F401
 
-        self._apriltag = apriltag
-        options = apriltag.DetectorOptions(
+        self._apriltag = dt_apriltags
+        # dt-apriltags 没有 DetectorOptions 中间类，参数直接给 Detector 构造函数
+        self.detector = dt_apriltags.Detector(
             families=family,
             nthreads=4,
             quad_decimate=1.0,      # 全分辨率，精度优先
             quad_sigma=0.0,
-            refine_edges=True,      # 亚像素边缘细化
+            refine_edges=1,         # int（dt-apriltags 文档用 0/1，不用 bool）
             decode_sharpening=0.25,
-            debug=False,
+            debug=0,                # int
         )
-        self.detector = apriltag.Detector(options)
 
     def detect_poses(self, gray, camera_params, tag_sizes, default_size):
-        # 关键：Python apriltag 库只有在 detect() 传入 camera_params + tag_size 时
-        # 才会解算位姿（填充 pose_t/pose_R）；只给 detector 设属性无效。
+        # dt-apriltags 的 detect() 必须显式 estimate_tag_pose=True 才解算位姿
+        # （否则 pose_R/pose_t 都是 None，被 _detection_pose 过滤掉）。
+        # 多级 fallback 同时兼容官方库旧 binding（不需要 estimate_tag_pose）。
         raw = None
         for attempt in (
+            lambda: self.detector.detect(
+                gray,
+                estimate_tag_pose=True,
+                camera_params=camera_params,
+                tag_size=default_size,
+            ),
             lambda: self.detector.detect(gray, camera_params=camera_params, tag_size=default_size),
             lambda: self.detector.detect(gray, camera_params, default_size),
             lambda: self.detector.detect(gray),
@@ -182,7 +195,6 @@ class AprilTagLibBackend(AprilTagBackend):
                 raw = attempt()
                 break
             except TypeError:
-                # 老版本绑定不支持位姿参数，逐级降级
                 continue
         if raw is None:
             return []

@@ -30,4 +30,7 @@ output/test_speaker_pytest/
 # ===== Jetson 部署产物（不入库） =====
 arm_grasp/install/
 arm_grasp/log/
-config/*.bak.*
+
+# ===== 备份目录 =====
+# 国赛/backups/ 集中放历史 .bak 文件（calibrate_tags / waypoint_capture 自动生成的快照），
+# 全部入库，方便事后回溯标定/航点历史。

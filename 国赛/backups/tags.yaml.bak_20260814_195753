@@ -1,0 +1,91 @@
+# AprilTag 绝对定位点配置
+#
+# 每个 tag 的 world 位姿必须与 ORB-SLAM3 的 /camera_pose 同一坐标系（建图时的世界系）。
+# 坐标用 tools/calibrate_tags.py 现场自动标定，不要手填。
+#
+# 坐标系约定（tag 本地系）：
+#   tag 中心为原点，tag 平面为 XY 平面，+Z 垂直于 tag 平面指向"正面"（狗看到的那一面）。
+#   旋转为 ZYX 欧拉角（R = Rz(yaw) @ Ry(pitch) @ Rx(roll)），单位度。
+#
+#   常见摆放（容易填错，务必注意）：
+#     - tag 平放在地面/台面、正面朝天:  pitch_deg = 0,  roll_deg = 0
+#     - tag 贴在墙/立柱上竖直放置:      pitch_deg = ±90（0 表示平放，不是竖直！）
+#       pitch=+90 时 tag 正面变为水平朝向，yaw_deg 决定朝向哪个方向：
+#       例如正面朝世界系 +X 的墙面上 yaw_deg = 0，朝 +Y 则 yaw_deg = 90。
+#   world.yaw_deg    —— tag 朝向（配合 pitch 使用，见上）
+#   world.pitch_deg  —— 俯仰，贴墙竖直时 ±90，平放时 0
+#   world.roll_deg   —— 面内旋转，一般 0
+#   world.z          —— tag 中心离地高度（m），建议接近相机高度
+#
+# 字段：
+#   id       —— tag36h11 家族 ID（0~586）
+#   size_m   —— tag 黑框物理边长（m）。与 output/apriltags 打印件一致：
+#               A4 300DPI 100% 缩放打印时黑框 = 17.95cm ≈ 0.18。
+#               打印后用尺实测黑框边长，若偏差 >2mm 需同步修改本字段！
+#   world    —— tag 中心在 SLAM 世界系的 6DoF 位姿（x/y/z 米，角度度）
+#   name     —— 语义名（对应场地定位点）
+#   note     —— 备注
+
+tag_family: tag36h11
+default_size_m: 0.18
+
+tags:
+  - id: 1
+    name: "点一"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "出发区右侧 - 对应 start_exit 附近"
+
+  - id: 2
+    name: "点二"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "出发区中央"
+
+  - id: 3
+    name: "点三"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "出发区左侧 - 收尾路径路标"
+
+  - id: 4
+    name: "点四"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "仪表箱1 观察侧2 - inspection_box_1_side_2"
+
+  - id: 5
+    name: "点五"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "仪表箱1 观察侧1 - inspection_box_1_side_1"
+
+  - id: 6
+    name: "点六"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "障碍区入口 - obstacle_entry"
+
+  - id: 7
+    name: "点七"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "障碍区出口 - obstacle_exit（优先级最高，锥桶漂移救援）"
+
+  - id: 8
+    name: "点八"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "仪表箱2 观察侧（归属待现场确认）"
+
+  - id: 9
+    name: "点九"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "抓取区接近点 - pick_area"
+
+  - id: 10
+    name: "点十"
+    size_m: 0.18
+    world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+    note: "放置区接近点 - place_A/B/C/D"
