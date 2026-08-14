@@ -154,6 +154,14 @@ def run_ros(args: argparse.Namespace) -> int:
             if self.freezer.is_complete() and self.frozen_inspection_text is None:
                 self.frozen_inspection_text = self.freezer.frozen_text()
                 self.frozen_inspection_text_detailed = self.freezer.frozen_text_detailed()
+                # 同步 memory 快照 + publish 日志(供排错查询,与 handle_inspection_results 格式一致)
+                self.bridge.inspection_memory = {r.zone: r for r in self.freezer._frozen.values()}
+                self.bridge.logger.write(
+                    {"type": "publish", "topic": "/inspection/all", "data": self.frozen_inspection_text}
+                )
+                self.bridge.logger.write(
+                    {"type": "publish", "topic": "/inspection/all_detailed", "data": self.frozen_inspection_text_detailed}
+                )
                 self.bridge.logger.write(
                     {
                         "type": "inspection_frozen",

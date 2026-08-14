@@ -104,8 +104,13 @@ class MotionMux(Node):
         now = self._now()
         nav_fresh = now - self.nav_time <= self.max_cmd_age_sec
         avoid_fresh = now - self.avoid_time <= self.max_cmd_age_sec
-        if self.cone_enabled and self.obstacle_priority and avoid_fresh:
-            self._send_twist(self.avoid_cmd, "cone_avoidance")
+        if self.cone_enabled and self.obstacle_priority:
+            # 避障区:命令新鲜则用避障输出;命令失联(如避障节点崩溃/停更)则停止,
+            # 绝不退回导航指令继续朝锥桶冲。
+            if avoid_fresh:
+                self._send_twist(self.avoid_cmd, "cone_avoidance")
+            else:
+                self._send(0.0, 0.0, 0.0, "avoid_stale_stop")
         elif nav_fresh:
             self._send_twist(self.nav_cmd, "waypoint_navigation")
         else:

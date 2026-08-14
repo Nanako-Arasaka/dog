@@ -42,6 +42,8 @@ STREAM_PORT = 8080
 STREAM_JPEG_QUALITY = 70
 STATUS_HISTORY_SIZE = 7
 STATUS_STABLE_MIN_COUNT = 4
+# 连续 N 帧 YOLO 未检出仪表状态 → 清空历史,防止陈旧读数串台
+UNKNOWN_RESET_COUNT = 5
 
 WINDOW_NAME = "Jetson YOLO 7-Class Live Detect"
 
@@ -332,10 +334,21 @@ def predict_with_fallback(model: YOLO, frame, use_half: bool):
 
 
 def stabilize_gauge_result(raw_gauge_class: str | None, status_history: deque[str],
-                           last_stable_gauge: str | None) -> tuple[str | None, int]:
-    """Use a short majority-vote window to suppress single-frame YOLO jumps."""
+                           last_stable_gauge: str | None,
+                           unknown_counter: dict) -> tuple[str | None, int]:
+    """Use a short majority-vote window to suppress single-frame YOLO jumps.
+
+    连续 UNKNOWN_RESET_COUNT 帧 YOLO 未检出仪表状态时清空历史并返回 unknown,
+    防止相机抖动/遮挡期间把上一帧的陈旧读数持续发布给 integration_bridge。
+    """
     if raw_gauge_class in GAUGE_STATUS_MAP:
+        unknown_counter["count"] = 0
         status_history.append(raw_gauge_class)
+    else:
+        unknown_counter["count"] = unknown_counter.get("count", 0) + 1
+        if unknown_counter["count"] >= UNKNOWN_RESET_COUNT:
+            status_history.clear()
+            return None, 0
 
     if not status_history:
         return last_stable_gauge, 0
@@ -399,6 +412,7 @@ def main() -> None:
     last_print_time = 0.0
     use_half = True
     gauge_history: deque[str] = deque(maxlen=STATUS_HISTORY_SIZE)
+    unknown_counter = {"count": 0}
     last_stable_gauge: str | None = None
     last_stable_zone: str | None = None
     last_inspection_publish_time = 0.0
@@ -467,10 +481,11 @@ def main() -> None:
 
             if best_zone is not None and best_zone != last_stable_zone:
                 gauge_history.clear()
+                unknown_counter["count"] = 0
                 last_stable_gauge = None
                 last_stable_zone = best_zone
 
-            stable_gauge, stable_count = stabilize_gauge_result(best_gauge, gauge_history, last_stable_gauge)
+            stable_gauge, stable_count = stabilize_gauge_result(best_gauge, gauge_history, last_stable_gauge, unknown_counter)
             if stable_gauge is not None:
                 last_stable_gauge = stable_gauge
 
