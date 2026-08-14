@@ -82,12 +82,12 @@ class AstraCameraNode(Node):
             return
 
         # ── 打开 RGB 摄像头 (Orbbec USB 2.0 Camera) ──
-        self.cap = cv2.VideoCapture(self.camera_index)
+        self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_V4L2)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc('M', 'J', 'P', 'G'))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         if not self.cap.isOpened():
-            self.get_logger().error('无法打开 Astra RGB 摄像头 (index=%s)', self.camera_index)
+            self.get_logger().error(f'无法打开 Astra RGB 摄像头 (index={self.camera_index})')
             return
         self.get_logger().info('Astra RGB 摄像头已打开 (640x480)')
 
@@ -183,7 +183,7 @@ class AstraCameraNode(Node):
         if mode == 'auto' or mode == 'uvc':
             fn = self._try_uvc_depth()
             if fn is not None:
-                self.get_logger().info('深度后端: uvc Z16 (video%s)', self._resolved_depth_index())
+                self.get_logger().info(f'深度后端: uvc Z16 (video{self._resolved_depth_index()})')
                 return fn
             if mode == 'uvc':
                 self.get_logger().warn('uvc 深度流不可用')
@@ -248,12 +248,12 @@ class AstraCameraNode(Node):
                     if fx > 0:
                         self.camera_fx, self.camera_fy = fx, fy
                         self.camera_cx, self.camera_cy = cx, cy
-                        self.get_logger().info('已从 SDK 读取内参 fx=%.2f fy=%.2f cx=%.2f cy=%.2f', fx, fy, cx, cy)
+                        self.get_logger().info(f'已从 SDK 读取内参 fx={fx:.2f} fy={fy:.2f} cx={cx:.2f} cy={cy:.2f}')
             except Exception:
                 pass
             return read
         except Exception as exc:  # noqa: BLE001
-            self.get_logger().warn('pyorbbecsdk 初始化失败: %s', exc)
+            self.get_logger().warn(f'pyorbbecsdk 初始化失败: {exc}')
             return None
 
     def _try_openni2(self):
@@ -283,13 +283,13 @@ class AstraCameraNode(Node):
         try:
             openni2.initialize()
         except Exception as exc:  # noqa: BLE001
-            self.get_logger().warn('openni2 initialize 失败: %s', exc)
+            self.get_logger().warn(f'openni2 initialize 失败: {exc}')
             return None
         try:
             dev = openni2.Device.open_any()
         except Exception as exc:  # noqa: BLE001
             openni2.unload()
-            self.get_logger().warn('openni2 未发现 Astra 设备: %s', exc)
+            self.get_logger().warn(f'openni2 未发现 Astra 设备: {exc}')
             return None
 
         # 尝试深度注册到 RGB 视角（消除 40mm 基线视差；Astra 固件支持时生效）
@@ -354,7 +354,7 @@ class AstraCameraNode(Node):
             except Exception:  # noqa: BLE001
                 pass
             openni2.unload()
-            self.get_logger().warn('openni2 初始化失败: %s', exc)
+            self.get_logger().warn(f'openni2 初始化失败: {exc}')
             return None
 
     def _try_uvc_depth(self):
@@ -423,7 +423,7 @@ class AstraCameraNode(Node):
             try:
                 depth_img = self._depth()
             except Exception as exc:  # noqa: BLE001
-                self.get_logger().warn('深度读取失败: %s', exc, throttle_duration_sec=5)
+                self.get_logger().warn(f'深度读取失败: {exc}', throttle_duration_sec=5)
                 depth_img = None
 
         if depth_img is None or depth_img.size == 0:
