@@ -70,6 +70,8 @@ class AstraCameraNode(Node):
         self.openni_fy = float(self.declare_parameter('openni_fy', 945.028).value)
         self.openni_cx = float(self.declare_parameter('openni_cx', 320.0).value)
         self.openni_cy = float(self.declare_parameter('openni_cy', 400.0).value)
+        # 是否把深度注册到 RGB 视角（默认关!实测注册后覆盖率暴跌 ~130 倍,见排障手册 4.6）
+        self.openni_registration = bool(self.declare_parameter('openni_registration', False).value)
         # realsense 转发后端的话题
         self.realsense_color_topic = str(self.declare_parameter(
             'realsense_color_topic', '/camera/camera/color/image_raw').value)
@@ -297,12 +299,15 @@ class AstraCameraNode(Node):
             self.get_logger().warn(f'openni2 未发现 Astra 设备: {exc}')
             return None
 
-        # 尝试深度注册到 RGB 视角（消除 40mm 基线视差；Astra 固件支持时生效）
-        try:
-            if hasattr(dev, "set_image_registration_mode"):
-                dev.set_image_registration_mode(True)
-        except Exception:  # noqa: BLE001
-            pass
+        # 深度注册到 RGB 视角（默认关闭:实测注册后覆盖率暴跌 ~130 倍;
+        # 开启可消除 RGB-IR 视差,但仅当覆盖率可接受时用）
+        if self.openni_registration:
+            try:
+                if hasattr(dev, "set_image_registration_mode"):
+                    dev.set_image_registration_mode(True)
+                    self.get_logger().info('openni 深度已注册到 RGB 视角')
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().warn(f'openni 注册模式设置失败: {exc}')
 
         try:
             depth = dev.create_depth_stream()
