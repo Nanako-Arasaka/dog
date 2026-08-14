@@ -71,6 +71,14 @@ platform_config:
   depth: 0.6
   height: 0.0        # 测试时设0, 上高台时改为0.22
 
+# ── 固定台面深度反投影兜底 (Astra 真深度不可用时的方案) ─────
+# 红条竖放在固定高台上,z(相机系)为已知常数:enabled=true 后,
+# vision_node 在深度无效时用 depth_m 反投影 x/y,不再报 invalid_depth。
+# 标定: 红条放台面中央,量相机到红条的实际距离填入 depth_m。
+fixed_depth:
+  enabled: false        # true=启用固定台面深度兜底(深度相机修好前用)
+  depth_m: 0.50         # 相机光心到台面距离(米,现场实测标定)
+
 # ── 相机→机械臂基座变换 (需实测校准!) ─────
 camera_to_arm:
   x: 0.255      # 相机在机械臂前方 (米)

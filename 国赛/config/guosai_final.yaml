@@ -132,9 +132,13 @@ arm:
   feedback_timeout_sec: 20.0
   # --- Astra/Orbbec 抓取相机 ---
   camera_index: 0                 # RGB 设备号（/dev/video0）
-  depth_mode: auto                # auto | pyorbbec | uvc | none（真实深度后端）
+  depth_mode: auto                # auto | pyorbbec | uvc | realsense | none（真实深度后端）
   depth_index: -1                 # UVC 深度设备号，-1=默认 camera_index+1
   fake_depth_fallback: false      # 深度不可用时禁止回退伪深度（正式比赛必须 false）
+  # realsense 转发后端（Astra 深度不可用时的首选兜底：复用巡检 RealSense 深度）
+  realsense_color_topic: /camera/camera/color/image_raw
+  realsense_depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+  realsense_info_topic: /camera/camera/color/camera_info
 
 voice_broadcast:
   enabled: true

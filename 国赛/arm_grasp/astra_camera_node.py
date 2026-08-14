@@ -8,7 +8,10 @@ RGB 仍通过 V4L2 UVC 读取；深度改为多后端真实获取，按顺序自
                    Jetson 安装：pip install pyorbbecsdk
   2. uvc       —— V4L2 Z16 深度流（RGB 的相邻 video 设备，如 /dev/video1）
                   部分 Orbbec 型号（Astra Pro/Pro Plus 等）UVC 模式暴露 Z16 深度
-  3. none      —— 后端全部不可用：默认【不再发布深度】，并循环报错提示。
+  3. realsense —— 转发 RealSense 的 color + aligned depth + camera_info 到
+                   /rgbd_cam/*（抓取视觉复用，零额外依赖；前提：RealSense
+                   视角覆盖机械臂工作台面，cam2arm 手眼标定按 RealSense 重做）
+  4. none      —— 后端全部不可用：默认【不再发布深度】，并循环报错提示。
                    抓取侧 vision_node 会得到 invalid_depth → 不动作（安全，不会用假深度去抓）。
 
 行为变化（相对旧版伪深度 0.5m 常量）：
@@ -41,7 +44,7 @@ class AstraCameraNode(Node):
         # ── 参数 ──
         # 相机节点号（默认 0 = /dev/video0 = Orbbec RGB UVC）
         self.camera_index = self.declare_parameter('camera_index', 0).value
-        # 深度后端: auto | pyorbbec | uvc | none
+        # 深度后端: auto | pyorbbec | uvc | realsense | none
         self.depth_mode = str(self.declare_parameter('depth_mode', 'auto').value).lower()
         # UVC 深度设备号（None → 默认 camera_index + 1）
         self.depth_index = self.declare_parameter('depth_index', -1).value
@@ -54,8 +57,20 @@ class AstraCameraNode(Node):
         self.camera_fy = float(self.declare_parameter('camera_fy', 570.34).value)
         self.camera_cx = float(self.declare_parameter('camera_cx', 320.0).value)
         self.camera_cy = float(self.declare_parameter('camera_cy', 240.0).value)
+        # realsense 转发后端的话题
+        self.realsense_color_topic = str(self.declare_parameter(
+            'realsense_color_topic', '/camera/camera/color/image_raw').value)
+        self.realsense_depth_topic = str(self.declare_parameter(
+            'realsense_depth_topic', '/camera/camera/aligned_depth_to_color/image_raw').value)
+        self.realsense_info_topic = str(self.declare_parameter(
+            'realsense_info_topic', '/camera/camera/color/camera_info').value)
 
         self.bridge = CvBridge()
+
+        # ── realsense 转发模式（不打开本地 V4L2，直接转发 RealSense 话题）──
+        if self.depth_mode == 'realsense':
+            self._init_realsense_mode()
+            return
 
         # ── 打开 RGB 摄像头 (Orbbec USB 2.0 Camera) ──
         self.cap = cv2.VideoCapture(self.camera_index)
@@ -76,7 +91,8 @@ class AstraCameraNode(Node):
                 self.get_logger().error(
                     '真实深度后端全部不可用：将不发布深度。'
                     '现场请安装 pyorbbecsdk (pip install pyorbbecsdk) '
-                    '或配置正确的 depth_index。抓取侧会报 invalid_depth 安全停止。'
+                    '或配置正确的 depth_index，或改用 depth_mode:=realsense。'
+                    '抓取侧会报 invalid_depth 安全停止。'
                 )
 
         # 每 2 秒重发 camera_info，确保 vision_node 能收到
@@ -85,6 +101,53 @@ class AstraCameraNode(Node):
 
         # 30fps 图像流
         self.timer = self.create_timer(0.033, self._timer)
+
+    # ──────────────────────────────────────────────
+    # realsense 转发后端
+    # ──────────────────────────────────────────────
+    def _init_realsense_mode(self) -> None:
+        """转发 RealSense 的 color/aligned-depth/camera_info 到 /rgbd_cam/*。
+
+        前提：RealSense 视角覆盖机械臂工作台面；cam2arm 手眼标定按 RealSense 重做。
+        深度统一转成 16UC1(mm)，与 vision_node 的解码约定一致。
+        """
+        self._depth = None
+        self._rs_info: CameraInfo | None = None
+        self.create_subscription(Image, self.realsense_color_topic, self._on_rs_color, 10)
+        self.create_subscription(Image, self.realsense_depth_topic, self._on_rs_depth, 10)
+        self.create_subscription(CameraInfo, self.realsense_info_topic, self._on_rs_info, 10)
+        self.info_timer = self.create_timer(2.0, self._publish_rs_info)
+        self.get_logger().info(
+            f'深度后端: realsense 转发 color={self.realsense_color_topic} '
+            f'depth={self.realsense_depth_topic}'
+        )
+
+    def _on_rs_color(self, msg: Image) -> None:
+        self.pub_color.publish(msg)
+
+    def _on_rs_depth(self, msg: Image) -> None:
+        enc = (msg.encoding or '').lower()
+        try:
+            if enc in ('32fc1', '32fc'):
+                arr = np.frombuffer(msg.data, dtype=np.float32).reshape(msg.height, msg.width)
+                arr16 = np.clip(arr * 1000.0, 0.0, 65535.0).astype(np.uint16)
+                out = self.bridge.cv2_to_imgmsg(arr16, encoding='16UC1')
+            elif enc in ('16uc1', 'mono16'):
+                out = msg
+            else:
+                return
+        except Exception:  # noqa: BLE001
+            return
+        out.header = msg.header
+        self.pub_depth.publish(out)
+
+    def _on_rs_info(self, msg: CameraInfo) -> None:
+        self._rs_info = msg
+        self.pub_info.publish(msg)
+
+    def _publish_rs_info(self) -> None:
+        if self._rs_info is not None:
+            self.pub_info.publish(self._rs_info)
 
     # ──────────────────────────────────────────────
     # 深度后端

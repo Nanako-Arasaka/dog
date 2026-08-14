@@ -46,6 +46,12 @@ class VisionNode(Node):
         platform_cfg = cfg.get('platform_config', {})
         self.platform_h = platform_cfg.get('height', 0.5)
 
+        # 固定台面深度反投影兜底(红条竖放在固定高台上,z 为已知常数;
+        # 深度相机不可用时仍可仅靠 2D 像素 + 已知 z 反投影出 x/y)
+        fd = cfg.get('fixed_depth', {})
+        self.fixed_depth_enabled = bool(fd.get('enabled', False))
+        self.fixed_depth_m = float(fd.get('depth_m', 0.5))
+
         # 相机→机械臂变换 (需实测校准)
         cam2arm = cfg.get('camera_to_arm', {})
         self.cam2arm = np.array([cam2arm.get('x', 0.1),
@@ -69,6 +75,7 @@ class VisionNode(Node):
         self.color_img = None
         self.depth_img = None
         self.pending_request = None   # 待处理的检测请求颜色
+        self._last_z_source = 'none'  # 'depth' | 'fixed'（调试用）
 
         # 订阅 — 相机
         self.create_subscription(Image, self.color_topic,
@@ -188,16 +195,26 @@ class VisionNode(Node):
         return np.median(valid)
 
     def _to_arm_frame(self, cx, cy):
-        """像素 → 相机坐标 → 机械臂基座坐标"""
-        if self.cam_K is None or self.depth_img is None:
+        """像素 → 相机坐标 → 机械臂基座坐标
+
+        深度可用时用深度采样 z；深度不可用(或无效)但启用了 fixed_depth 时，
+        用固定台面深度反投影(红条竖放在固定高台上,z 为已知常数)。
+        """
+        if self.cam_K is None:
             return None
 
-        d = self._sample_depth(cx, cy)
+        d = self._sample_depth(cx, cy) if self.depth_img is not None else 0
         if d == 0:
-            return None
+            if self.fixed_depth_enabled and self.fixed_depth_m > 0:
+                z_cam = self.fixed_depth_m
+                self._last_z_source = 'fixed'
+            else:
+                return None
+        else:
+            z_cam = d / 1000.0
+            self._last_z_source = 'depth'
 
         # 像素 → 相机坐标系 (m)
-        z_cam = d / 1000.0
         fx, fy = self.cam_K[0, 0], self.cam_K[1, 1]
         u0, v0 = self.cam_K[0, 2], self.cam_K[1, 2]
         x_cam = (cx - u0) * z_cam / fx
@@ -227,7 +244,8 @@ class VisionNode(Node):
         best = objs[0]
         p_arm = self._to_arm_frame(best['cx'], best['cy'])
         if p_arm is None:
-            self.get_logger().warn('[视觉节点] 深度无效')
+            hint = '深度不可用且 fixed_depth 未启用' if not self.fixed_depth_enabled else '深度与 fixed_depth 均无效'
+            self.get_logger().warn(f'[视觉节点] 坐标无效({hint})')
             self.pub_pose.publish(String(data='invalid_depth'))
             return
 
@@ -247,7 +265,7 @@ class VisionNode(Node):
         self.pub_pose.publish(String(data=pose))
         self.get_logger().info(f'[视觉节点] ★ 抓取位姿(arm系): x={gx:.3f} y={gy:.3f} '
                                f'z={gz_grasp:.3f} angle={best["angle"]:.0f}° conf={conf:.2f} '
-                               f'像素({best["cx"]},{best["cy"]})')
+                               f'z_src={self._last_z_source} 像素({best["cx"]},{best["cy"]})')
 
         # 调试图像
         vis = self.color_img.copy()
