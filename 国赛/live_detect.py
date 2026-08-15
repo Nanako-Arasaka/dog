@@ -241,9 +241,9 @@ def check_environment(model_path: str, camera_path: str) -> bool:
     if not os.path.exists(model_path):
         print(f"[ERROR] Model file not found: {model_path}")
         return False
-    if not os.path.exists(camera_path):
-        print(f"[ERROR] Camera device not found: {camera_path}")
-        return False
+    # 相机路径允许不存在 —— open_camera_with_fallback 会从 camera_id 递增找可用设备
+    if camera_path and not os.path.exists(camera_path):
+        print(f"[WARN] Camera device not found: {camera_path} — 将尝试递增查找可用设备")
     return True
 
 
@@ -253,6 +253,32 @@ def configure_camera_exposure(camera_path: str) -> None:
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
+
+
+CAMERA_MAX_INDEX = 20  # 递增查找上限
+
+
+def open_camera_with_fallback(start_id: int) -> cv2.VideoCapture:
+    """从 start_id 开始递增尝试打开摄像头, 找到第一个能出图的设备。
+
+    - /dev/videoN 有 metadata 节点(如 video1)打开后 read 永远 False, 必须实测 read
+    - 打不开/读不出帧就试下一个 index, 直到 CAMERA_MAX_INDEX
+    """
+    for camera_id in range(int(start_id), CAMERA_MAX_INDEX + 1):
+        cap = open_camera(camera_id)
+        if not cap.isOpened():
+            cap.release()
+            continue
+        # 实测能否读出帧 —— metadata 节点 opened=True 但 read 永远失败
+        ret, _ = cap.read()
+        if not ret:
+            print(f"[WARN] /dev/video{camera_id} opened but read failed (metadata?), try next")
+            cap.release()
+            continue
+        print(f"[OK] camera /dev/video{camera_id} (from start_id={start_id})")
+        return cap
+    print(f"[ERROR] No usable camera found from index {start_id} to {CAMERA_MAX_INDEX}")
+    return cv2.VideoCapture()  # 无效句柄, isOpened()=False
 
 
 def open_camera(camera_id: int) -> cv2.VideoCapture:
@@ -388,9 +414,10 @@ def main() -> None:
         print(f"  Actual:   {class_names}")
     print(f"[INFO] Model classes: {class_names}")
 
-    cap = open_camera(args.camera_id)
+    # 相机递增回退: 从 camera_id 开始试, 打不开/metadata 节点就试下一个, 不直接退出
+    cap = open_camera_with_fallback(args.camera_id)
     if not cap.isOpened():
-        print(f"[ERROR] Failed to open camera: {args.camera_path}")
+        print(f"[ERROR] Failed to open any camera starting from index {args.camera_id}")
         sys.exit(1)
 
     frame_buffer = FrameBuffer()
