@@ -30,11 +30,23 @@ class State(str, Enum):
     WAIT_INSPECTION = "WAIT_INSPECTION"
     GO_PICK = "GO_PICK"
     GRASP = "GRASP"
+    CENTER = "CENTERING"          # 底座微调中 (边缘修正 / 空抓重试旋转)
+    VERIFY = "VERIFYING"          # 抓取后二次视觉确认
     GO_PLACE = "GO_PLACE"
     PLACE = "PLACE"
     GO_FINISH = "GO_FINISH"
     DONE = "DONE"
     ERROR = "ERROR"
+
+
+# 抓取闭环策略常量 (对齐 arm_grasp 源码版 task_manager_node)
+GRASP_EDGE_MARGIN = 80        # 像素, cx 距左右边小于此值触发底座微调
+GRASP_EDGE_ADJUST = 60        # 像素, 首次边缘微调时的 cx 修正量
+GRASP_RETRY_DEG_MIN = 40      # 像素, 空抓重试最小底座旋转量 (~4°)
+GRASP_RETRY_DEG_MAX = 150     # 像素, 空抓重试最大底座旋转量 (~15°)
+GRASP_Z_TOL = 0.03            # 米, 抓取后 z 变化超过此值视为物体被拎起
+MAX_GRASP_RETRIES = 10        # 最多空抓重试次数 (10×~5°≈50°后回 home 放弃)
+VISION_ROLLBACK_MAX = 3       # 视觉丢失回退底座最多次数
 
 
 @dataclass
@@ -45,6 +57,7 @@ class ArmRequest:
     started_at: float = 0.0
     command: str = ""
     waiting_for_vision: bool = False
+    phase: str = "detect"   # grasp 子阶段: detect(等首检视觉) | center(等底座反馈) | grasp(等抓取反馈) | verify(等二次视觉)
 
 
 def load_yaml(path: str) -> dict[str, Any]:
@@ -126,6 +139,18 @@ class TaskManagerNode(Node):
         self.last_status = ""
         self.started = False
         self._exit_timer = None
+
+        # ── 抓取闭环策略状态 (对齐源码版) ──────
+        self._grasp_retries = 0        # 当前物体空抓重试次数
+        self._pre_x = 0.0              # 抓取前物体坐标 (验证用)
+        self._pre_y = 0.0
+        self._pre_z = 0.0
+        self._pre_cx = 320
+        self._verify_cx = 320          # VERIFY 时检测到的 cx, 判断旋转方向
+        self._desired_base = 512       # 期望底座位置, 跨方法共享传给 direct_grasp
+        self._last_seen_cx: int | None = None   # 每次视觉成功更新, 供丢失回退
+        self._rollback_count = 0       # 视觉丢失回退次数
+        self._grasp_pose: dict | None = None    # 最近一次有效位姿 (微调失败兜底直抓)
 
         self.pub_goal = self.create_publisher(String, self.config.get("navigation", {}).get("goal_topic", "/waypoint/goal"), 10)
         self.pub_cone = self.create_publisher(Bool, self.config.get("cone_avoidance", {}).get("enabled_topic", "/motion/enable_cone_avoidance"), 10)
@@ -225,22 +250,61 @@ class TaskManagerNode(Node):
         data = msg.data.strip()
         if data in ("", "none", "invalid_depth", "low_conf"):
             self.get_logger().warn(f"grasp vision failed: {data}")
-            self._retry_or_fail_arm()
+            self._handle_grasp_vision_fail(data)
             return
         parts = data.split("|")
         if parts[0] != "grasp" or len(parts) < 5:
             self.get_logger().warn(f"bad grasp pose: {data}")
-            self._retry_or_fail_arm()
+            self._handle_grasp_vision_fail(data)
             return
-        cmd = self._direct_grasp_command(parts)
-        self.arm_request.waiting_for_vision = False
-        self.arm_request.command = "direct_grasp"
-        self.arm_request.started_at = self._now()
-        self.get_logger().info(f"fallback grasp command attempt {self.arm_request.attempt}")
-        if self.dry_run:
-            self._complete_arm_request(True)
-        else:
-            self.pub_arm_command.publish(String(data=cmd))
+
+        cx = int(parts[6]) if len(parts) > 6 else 320
+        cy = int(parts[7]) if len(parts) > 7 else 240
+        pose = {
+            "x": float(parts[1]),
+            "y": float(parts[2]),
+            "z": float(parts[3]),
+            "angle": float(parts[4]),
+            "conf": float(parts[5]) if len(parts) > 5 else 0.5,
+            "cx": cx,
+            "cy": cy,
+        }
+        # ★ 每次成功检测都记录, 供视觉丢失回退用
+        self._last_seen_cx = cx
+        self._rollback_count = 0
+        self.get_logger().info(
+            f"grasp pose x={pose['x']:.3f} y={pose['y']:.3f} z={pose['z']:.3f} "
+            f"angle={pose['angle']:.1f} conf={pose['conf']:.2f} px=({cx},{cy})"
+        )
+
+        # ── VERIFY: 抓取后二次视觉确认 ────────
+        if self.arm_request.phase == "verify":
+            self._verify_grasp(pose)
+            return
+
+        # ── DETECT: 边缘微调(仅首次) / 直抓 ────
+        self._grasp_pose = pose
+        if self._grasp_retries > 0:
+            # 重试中跳过边缘微调, 避免与定向旋转冲突
+            self.get_logger().info(f"retrying grasp, skip edge align (retries={self._grasp_retries})")
+            self._do_grasp(pose)
+            return
+
+        if cx < GRASP_EDGE_MARGIN:
+            adj_cx = cx - GRASP_EDGE_ADJUST
+            self.get_logger().info(
+                f"object too left (cx={cx}<{GRASP_EDGE_MARGIN}), rotate base →cx={adj_cx}")
+            self._send_center_base(adj_cx)
+            return
+        if cx > 640 - GRASP_EDGE_MARGIN:
+            adj_cx = cx + GRASP_EDGE_ADJUST
+            self.get_logger().info(
+                f"object too right (cx={cx}>{640 - GRASP_EDGE_MARGIN}), rotate base →cx={adj_cx}")
+            self._send_center_base(adj_cx)
+            return
+
+        self.get_logger().info(f"object in safe zone (cx={cx},cy={cy}), direct grasp")
+        self._do_grasp(pose)
 
     def _on_arm_feedback(self, msg: String) -> None:
         if self.arm_request is None:
@@ -251,6 +315,28 @@ class TaskManagerNode(Node):
         if cmd != self.arm_request.command:
             return
         self.get_logger().info(f"arm feedback {cmd} ok={ok}")
+
+        # ── 底座微调完成 → 重新检测 ────────────
+        if cmd == "center_base":
+            self._on_center_base_done(ok)
+            return
+
+        # ── 直抓完成 → 二次视觉确认 ────────────
+        if cmd == "direct_grasp":
+            if ok:
+                self.arm_request.phase = "verify"
+                self.arm_request.waiting_for_vision = True
+                self.arm_request.started_at = self._now()
+                self.state = State.VERIFY
+                self.get_logger().info("arm lifted, second vision confirm...")
+                if self.dry_run:
+                    self._complete_arm_request(True)
+                else:
+                    self.pub_vision_request.publish(String(data="red"))
+            else:
+                self._retry_or_fail_arm()
+            return
+
         if ok:
             self._complete_arm_request(True)
         else:
@@ -269,7 +355,12 @@ class TaskManagerNode(Node):
             elapsed = self._now() - self.arm_request.started_at
             if elapsed > self.arm_feedback_timeout_sec:
                 self.get_logger().warn(f"arm request timeout: {self.arm_request}")
-                self._retry_or_fail_arm()
+                if self.arm_request.phase == "verify":
+                    # 二次确认超时 → 物体大概率被夹爪完全遮挡 → 判定成功
+                    self.get_logger().info("verify timeout, treat as success (object occluded)")
+                    self._complete_arm_request(True)
+                else:
+                    self._retry_or_fail_arm()
             return
 
         if self.state == State.WAIT_INSPECTION:
@@ -328,6 +419,16 @@ class TaskManagerNode(Node):
 
     def _start_grasp(self) -> None:
         self.state = State.GRASP
+        # 重置本次抓取的闭环策略状态
+        self._grasp_retries = 0
+        self._desired_base = 512
+        self._last_seen_cx = None
+        self._rollback_count = 0
+        self._grasp_pose = None
+        self._pre_x = 0.0
+        self._pre_y = 0.0
+        self._pre_z = 0.0
+        self._pre_cx = 320
         self.arm_request = ArmRequest(kind="grasp", attempt=1, started_at=self._now())
         if self._call_grasp_service_if_ready():
             return
@@ -374,27 +475,158 @@ class TaskManagerNode(Node):
     def _request_grasp_vision(self) -> None:
         if self.arm_request is None:
             return
+        self.arm_request.phase = "detect"
         self.arm_request.waiting_for_vision = True
         self.arm_request.started_at = self._now()
+        self.state = State.GRASP
         self.get_logger().info(f"requesting red-bar vision attempt {self.arm_request.attempt}")
         if self.dry_run:
             self._complete_arm_request(True)
         else:
             self.pub_vision_request.publish(String(data="red"))
 
-    def _direct_grasp_command(self, parts: list[str]) -> str:
-        x = float(parts[1])
-        y = float(parts[2])
-        z = float(parts[3])
-        angle = float(parts[4])
-        conf = float(parts[5]) if len(parts) > 5 else 0.5
-        cx = int(parts[6]) if len(parts) > 6 else 320
-        cy = int(parts[7]) if len(parts) > 7 else 240
-        base = max(200, min(800, int(512 + (cx - 320) * 0.5)))
+    def _do_grasp(self, pose: dict) -> None:
+        """直抓: 使用 _desired_base (跨方法共享), 记录抓取前坐标供验证"""
+        if self.arm_request is None:
+            return
+        self._pre_x = pose["x"]
+        self._pre_y = pose["y"]
+        self._pre_z = pose["z"]
+        self._pre_cx = pose["cx"]
         self.get_logger().info(
-            f"grasp pose x={x:.3f} y={y:.3f} z={z:.3f} angle={angle:.1f} conf={conf:.2f}"
+            f"█████ direct grasp: pre_pos=({self._pre_x:.3f},{self._pre_y:.3f},"
+            f"{self._pre_z:.3f}) base={self._desired_base} "
+            f"attempt={self.arm_request.attempt} █████"
         )
-        return f"direct_grasp|{x:.4f}|{y:.4f}|{z:.4f}|{angle:.1f}|3.0|{cx}|{cy}|{base}"
+        cmd = (
+            f"direct_grasp|{pose['x']:.4f}|{pose['y']:.4f}|{pose['z']:.4f}|"
+            f"{pose['angle']:.1f}|3.0|{pose['cx']}|{pose['cy']}|{self._desired_base}"
+        )
+        self.arm_request.command = "direct_grasp"
+        self.arm_request.phase = "grasp"
+        self.arm_request.waiting_for_vision = False
+        self.arm_request.started_at = self._now()
+        self.state = State.GRASP
+        if self.dry_run:
+            self._complete_arm_request(True)
+        else:
+            self.pub_arm_command.publish(String(data=cmd))
+
+    def _send_center_base(self, cx_target: int) -> None:
+        """发送底座微调命令, 同时记录期望底座位置 (跨方法共享)"""
+        if self.arm_request is None:
+            return
+        self._desired_base = max(200, min(800, int(512 + (cx_target - 320) * 0.5)))
+        cmd = f"center_base|||0|0|1.0|{cx_target}|0"
+        self.arm_request.command = "center_base"
+        self.arm_request.phase = "center"
+        self.arm_request.waiting_for_vision = False
+        self.arm_request.started_at = self._now()
+        self.state = State.CENTER
+        self.get_logger().info(
+            f"send center_base →cx={cx_target} desired_base={self._desired_base}")
+        if self.dry_run:
+            self._on_center_base_done(True)
+        else:
+            self.pub_arm_command.publish(String(data=cmd))
+
+    def _on_center_base_done(self, ok: bool) -> None:
+        """底座微调反馈: 成功→重新检测; 失败→用旧位姿兜底直抓"""
+        if self.arm_request is None:
+            return
+        if not ok:
+            self.get_logger().error("base align failed, fallback direct grasp with last pose")
+            if self._grasp_pose is not None:
+                self._do_grasp(self._grasp_pose)
+            else:
+                self._retry_or_fail_arm()
+            return
+        self.get_logger().info("base aligned, re-detecting...")
+        self.arm_request.phase = "detect"
+        self.arm_request.waiting_for_vision = True
+        self.arm_request.started_at = self._now()
+        self.state = State.GRASP
+        if self.dry_run:
+            self._complete_arm_request(True)
+        else:
+            self.pub_vision_request.publish(String(data="red"))
+
+    def _verify_grasp(self, pose: dict) -> None:
+        """
+        z 轴判断法: 对比抓取前后物体 z 坐标变化
+        - Δz 明显 → 物体被拎起 → 成功
+        - Δz 几乎不变 → 空抓 → 按 |cx-320| 动态定向旋转底座重试
+        """
+        dz = abs(pose["z"] - self._pre_z)
+        self.get_logger().info(
+            f"verify: pre_z={self._pre_z:.3f} post_z={pose['z']:.3f} "
+            f"Δz={dz:.3f}m (tol={GRASP_Z_TOL:.3f}m)")
+
+        if dz > GRASP_Z_TOL:
+            self.get_logger().info(
+                "═══════════════════════════════════════\n"
+                "  ★★★★★ grasp verified: object lifted ★★★★★\n"
+                "═══════════════════════════════════════")
+            self._complete_arm_request(True)
+            return
+
+        self._grasp_retries += 1
+        self.get_logger().warn(
+            f"✗ empty grasp! object still on table "
+            f"({self._grasp_retries}/{MAX_GRASP_RETRIES})")
+
+        if self._grasp_retries > MAX_GRASP_RETRIES:
+            self.get_logger().error("grasp retries exhausted, return base home and give up")
+            self.pub_arm_command.publish(String(data="center_base|||0|0|1.0|320|0"))
+            self.arm_request = None
+            self._fail("grasp_empty_after_retries")
+            return
+
+        # ★ 定向旋转: 按物体离中心距离动态计算旋转量 (40~150px)
+        cx_now = pose["cx"]
+        self._verify_cx = cx_now
+        pixel_off = abs(cx_now - 320)
+        degree_offset = max(
+            GRASP_RETRY_DEG_MIN,
+            min(GRASP_RETRY_DEG_MAX, int(40 + pixel_off * 0.35)),
+        )
+        approx_deg = degree_offset * 0.1
+        if cx_now > 320:
+            adj_cx = 320 - degree_offset
+            direction = "right"
+        else:
+            adj_cx = 320 + degree_offset
+            direction = "left"
+        self.get_logger().info(
+            f"→ retry: rotate base {direction} ~{approx_deg:.1f}° "
+            f"(|cx-320|={pixel_off}px, offset={degree_offset}px, adj_cx={adj_cx})")
+        self._send_center_base(adj_cx)
+
+    def _handle_grasp_vision_fail(self, reason: str) -> None:
+        """视觉检测失败处理:
+        - VERIFY 时失败 → 物体被夹爪遮挡/消失 → 判定成功
+        - 检测时失败 → 回退到底座记忆位置 (最多 VISION_ROLLBACK_MAX 次)"""
+        if self.arm_request is None:
+            return
+        if self.arm_request.phase == "verify":
+            self.get_logger().info(
+                "═══════════════════════════════════════\n"
+                "  ★★★★★ grasp success (object occluded/disappeared) ★★★★★\n"
+                "═══════════════════════════════════════")
+            self._complete_arm_request(True)
+            return
+
+        rollback_cx = self._last_seen_cx if self._last_seen_cx is not None else self._pre_cx
+        if self._rollback_count < VISION_ROLLBACK_MAX:
+            self._rollback_count += 1
+            self.get_logger().warn(
+                f"vision lost ({reason})! rollback base →cx={rollback_cx} "
+                f"(src={'memory' if self._last_seen_cx is not None else 'pre_grasp'}, "
+                f"{self._rollback_count}/{VISION_ROLLBACK_MAX})")
+            self._send_center_base(rollback_cx)
+            return
+        self.get_logger().error(f"vision rollback {VISION_ROLLBACK_MAX} times, retry vision")
+        self._retry_or_fail_arm()
 
     def _publish_place_command(self, zone: str) -> None:
         if self.arm_request is None:
@@ -417,6 +649,9 @@ class TaskManagerNode(Node):
             self._fail("arm_action_failed")
             return
         if request.kind == "grasp":
+            # 抓取成功 → 清理闭环策略状态, 进入搬运
+            self._grasp_retries = 0
+            self._last_seen_cx = None
             zone = self.abnormal_zones[self.target_index]
             waypoint = self.place_waypoints.get(zone)
             if not waypoint:
@@ -506,6 +741,17 @@ class TaskManagerNode(Node):
         self.target_index = 0
         self.arm_request = None
         self.started = False
+        # 清零抓取闭环策略状态
+        self._grasp_retries = 0
+        self._pre_x = 0.0
+        self._pre_y = 0.0
+        self._pre_z = 0.0
+        self._pre_cx = 320
+        self._verify_cx = 320
+        self._desired_base = 512
+        self._last_seen_cx = None
+        self._rollback_count = 0
+        self._grasp_pose = None
         self._publish_cone(False)
         self._publish_stop(True)
         self.pub_goal.publish(String(data=""))
