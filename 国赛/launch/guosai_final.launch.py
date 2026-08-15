@@ -257,6 +257,8 @@ def _setup(context, *args, **kwargs):
                 "arm_grasp/arm_grasp/vision_node.py",
                 {
                     "config_path": _expand(arm.get("grasp_config", ""), root),
+                    "zone_model_path": _expand(arm.get("zone_model_path", "best_7class.pt"), root),
+                    "zone_topic": arm.get("zone_topic", "/placement/recognized_zone"),
                 },
                 "arm_vision_node",
             ),

@@ -127,6 +127,8 @@ arm:
   place_service_prefix: /arm/place_
   direct_grasp_topic: /task/direct_grasp
   arm_command_topic: /arm/command
+  # 放置区字母识别模型（7 类 YOLO，与巡检同款；vision_node 用）
+  zone_model_path: ${GUOSAI_ROOT}/best_7class.pt
   feedback_topic: /arm/feedback
   max_retries: 3
   feedback_timeout_sec: 20.0
@@ -172,4 +174,7 @@ fsm:
     D: place_D
   final_waypoint: finish
   max_abnormal_zones: 2
+  # 放置区字母确认：到达放置区后先识别字母，与记忆中的异常目标一致才松爪；
+  # false 退化为纯航点对齐（原行为）
+  place_visual_confirm: true
   auto_start: true

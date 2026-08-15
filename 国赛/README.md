@@ -113,8 +113,8 @@ flowchart LR
 **3. 锥形桶避障（10 分）**
 YOLO 检测锥桶（conf 0.35）→ 四级规则策略：紧急停车（面积 > 20%）→ 主动避障（中央区域或面积 > 8%）→ 微调偏航 → 全速前进（vx=0.16）。转向方向由左右锥桶加权面积比较决定，8 Hz 通过 UDP 下发狗端。
 
-**4. 红条抓取（50 分）**
-`arm_grasp/` 基于 JetArm 六自由度机械臂：HSV 双阈值红条检测 + RealSense 深度做 3D 位姿估计；几何法两连杆 IK；视觉闭环判定抓取成功（Δz > 3 cm），空抓按像素偏移定向重试。只有当放置区识别字母与异常目标一致时才松爪，防止误放。
+**4. 红条抓取与放置（50 分）**
+`arm_grasp/` 基于 JetArm 六自由度机械臂：HSV 双阈值红条检测 + Astra 真实深度（OpenNI2 后端）做 3D 位姿估计；几何法两连杆 IK；视觉闭环判定抓取成功（Δz > 3 cm），空抓按像素偏移定向重试。**放置联动（2026-08-15 新增）**：`task_manager` 到达放置区后先请求视觉识别放置区字母（`vision_node` 复用 7 类 YOLO 识别 zone_A/B/C/D，发布 `/placement/recognized_zone`），识别字母与「仪表盘记忆中的异常目标区」一致才松爪放置；不一致/识别失败重试 3 次、超时 8 s 后按航点兜底放置（不卡死）。放置目标由 `/inspection/gauge_memory`（语音播报时存储的记忆）直接驱动，`fsm.place_visual_confirm` 可关闭恢复纯航点对齐。
 
 **5. SLAM 导航与运动仲裁**
 `controller/ORB_SLAM3/` 做 RGB-D 视觉定位，发布 `/camera_pose`；`waypoint_navigator` 按 FSM 顺序到达航点；`motion_mux` 仲裁导航/避障/急停速度；`lite2_motion_receiver.py` 把指令转成 Lite2 私有协议下发狗体（默认 `192.168.1.120:43893`），0.8 s 超时自动停机。

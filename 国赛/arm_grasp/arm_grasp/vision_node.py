@@ -69,13 +69,23 @@ class VisionNode(Node):
         self.info_topic = self.declare_parameter(
             'info_topic', '/rgbd_cam/color/camera_info').value
 
+        # ── 放置区字母识别（复用 7 类 YOLO：zone_A/B/C/D）──
+        self.zone_model_path = self.declare_parameter(
+            'zone_model_path', 'best_7class.pt').value
+        self.zone_conf = float(self.declare_parameter('zone_confidence', 0.35).value)
+        self.zone_topic = self.declare_parameter(
+            'zone_topic', '/placement/recognized_zone').value
+
         # 状态
         self.bridge = CvBridge()
         self.cam_K = None
         self.color_img = None
         self.depth_img = None
         self.pending_request = None   # 待处理的检测请求颜色
+        self.pending_zone_request = False  # 待处理的放置区字母识别请求
         self._last_z_source = 'none'  # 'depth' | 'fixed'（调试用）
+        self._yolo_model = None       # 延迟加载（首次 zone 请求时）
+        self._yolo_error = None
 
         # 订阅 — 相机
         self.create_subscription(Image, self.color_topic,
@@ -95,6 +105,8 @@ class VisionNode(Node):
         # 发布
         self.pub_pose = self.create_publisher(String, '/vision/grasp_pose', 10)
         self.pub_dbg = self.create_publisher(Image, '/vision/debug_image', 10)
+        # 放置区字母识别结果（A/B/C/D 或 none）
+        self.pub_zone = self.create_publisher(String, self.zone_topic, 10)
 
         # 主循环 (10Hz)
         self.create_timer(0.1, self._timer)
@@ -120,11 +132,14 @@ class VisionNode(Node):
             self.get_logger().info(f'[视觉节点] 相机内参已加载 fx={self.cam_K[0,0]:.1f}')
 
     def _cb_detect_req(self, msg):
-        """接收检测请求: 'red' 或 'green'"""
-        color = msg.data.strip().lower()
-        if color in ('red', 'green'):
-            self.pending_request = color
-            self.get_logger().info(f'[视觉节点] 收到检测请求: {color}')
+        """接收检测请求: 'red' / 'green'(长条) 或 'zone' / 'place_zone'(放置区字母)"""
+        req = msg.data.strip().lower()
+        if req in ('red', 'green'):
+            self.pending_request = req
+            self.get_logger().info(f'[视觉节点] 收到检测请求: {req}')
+        elif req in ('zone', 'place_zone', 'place'):
+            self.pending_zone_request = True
+            self.get_logger().info('[视觉节点] 收到放置区字母识别请求')
 
     def _cb_inspection(self, msg):
         """从巡检结果推断目标颜色(异常=red)"""
@@ -237,9 +252,65 @@ class VisionNode(Node):
         p_arm = p_cam + self.cam2arm
         return (p_arm[0], p_arm[1], p_arm[2])
 
+    # ── 放置区字母识别 ────────────────────────
+
+    def _detect_zone(self):
+        """识别视野中的放置区字母(A/B/C/D)，结果发布到 /placement/recognized_zone。
+
+        复用 7 类 YOLO(best_7class.pt: zone_A/B/C/D + gauge 三态)；
+        模型延迟加载(首次 zone 请求时)，加载失败/推理异常 → 发布 'none'(FSM 会重试/兜底)。
+        """
+        if self.color_img is None:
+            self._publish_zone('none')
+            return
+        if self._yolo_model is None and self._yolo_error is None:
+            try:
+                from ultralytics import YOLO
+                self._yolo_model = YOLO(self.zone_model_path)
+                self.get_logger().info(
+                    f'[视觉节点] 放置区字母模型已加载: {self.zone_model_path}')
+            except Exception as exc:  # noqa: BLE001
+                self._yolo_error = str(exc)
+                self.get_logger().error(f'[视觉节点] YOLO 加载失败: {exc}')
+                self._publish_zone('none')
+                return
+        if self._yolo_model is None:
+            self.get_logger().warn(f'[视觉节点] 字母识别不可用: {self._yolo_error}')
+            self._publish_zone('none')
+            return
+        try:
+            results = self._yolo_model.predict(
+                self.color_img, imgsz=416, conf=self.zone_conf, verbose=False)
+            r = results[0]
+            best, best_c = None, 0.0
+            if r.boxes is not None and len(r.boxes) > 0:
+                names = self._yolo_model.names
+                for cls_id, conf in zip(r.boxes.cls, r.boxes.conf):
+                    name = names.get(int(cls_id), '').strip().upper()
+                    if name.startswith('ZONE_') and len(name) > 5:
+                        letter = name[-1]
+                        if letter in 'ABCD' and float(conf) > best_c:
+                            best, best_c = letter, float(conf)
+            if best:
+                self.get_logger().info(
+                    f'[视觉节点] ★ 放置区字母识别: {best} conf={best_c:.2f}')
+                self._publish_zone(best)
+            else:
+                self.get_logger().warn('[视觉节点] 未识别到放置区字母(zone_* 无命中)')
+                self._publish_zone('none')
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'[视觉节点] 字母识别失败: {exc}')
+            self._publish_zone('none')
+
+    def _publish_zone(self, zone: str) -> None:
+        self.pub_zone.publish(String(data=zone))
+
     # ── 主循环 ──────────────────────────────
 
     def _timer(self):
+        if self.pending_zone_request:
+            self.pending_zone_request = False
+            self._detect_zone()
         if self.color_img is None or self.pending_request is None:
             return
 

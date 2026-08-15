@@ -9,6 +9,7 @@ modules through topics/services.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from dataclasses import dataclass
@@ -47,6 +48,10 @@ GRASP_RETRY_DEG_MAX = 150     # 像素, 空抓重试最大底座旋转量 (~15°
 GRASP_Z_TOL = 0.03            # 米, 抓取后 z 变化超过此值视为物体被拎起
 MAX_GRASP_RETRIES = 10        # 最多空抓重试次数 (10×~5°≈50°后回 home 放弃)
 VISION_ROLLBACK_MAX = 3       # 视觉丢失回退底座最多次数
+
+# 放置区字母确认常量
+PLACEMENT_ZONE_RETRIES = 3       # 字母识别失败/不匹配最大重试次数
+PLACEMENT_ZONE_TIMEOUT_SEC = 8.0 # 单次识别等待超时(秒)，超时后按航点兜底放置
 
 
 @dataclass
@@ -115,6 +120,9 @@ class TaskManagerNode(Node):
         self.place_waypoints = dict(fsm_cfg.get("place_waypoints", {}))
         self.final_waypoint = fsm_cfg.get("final_waypoint", "finish")
         self.max_abnormal_zones = int(fsm_cfg.get("max_abnormal_zones", 2))
+        # 放置区字母确认：到达放置区后先识别字母，与记忆中的异常目标一致才松爪。
+        # false 时退化为纯航点对齐（原行为）。
+        self.place_visual_confirm = bool(fsm_cfg.get("place_visual_confirm", True))
         self.inspection_timeout_sec = float(inspection_cfg.get("wait_timeout_sec", 45.0))
         self.inspection_per_waypoint_sec = float(inspection_cfg.get("per_waypoint_wait_sec", 5.0))
         self.arm_max_retries = int(arm_cfg.get("max_retries", 3))
@@ -152,6 +160,11 @@ class TaskManagerNode(Node):
         self._rollback_count = 0       # 视觉丢失回退次数
         self._grasp_pose: dict | None = None    # 最近一次有效位姿 (微调失败兜底直抓)
 
+        # ── 放置区字母确认状态 ──────────────────────
+        self._place_zone_pending = False        # 是否在等待放置区字母识别
+        self._place_zone_retries = 0            # 当前放置区确认重试次数
+        self._place_zone_started_at = 0.0       # 本次确认开始时间
+
         self.pub_goal = self.create_publisher(String, self.config.get("navigation", {}).get("goal_topic", "/waypoint/goal"), 10)
         self.pub_cone = self.create_publisher(Bool, self.config.get("cone_avoidance", {}).get("enabled_topic", "/motion/enable_cone_avoidance"), 10)
         self.pub_stop = self.create_publisher(Bool, self.config.get("motion", {}).get("stop_topic", "/motion/stop"), 10)
@@ -169,6 +182,8 @@ class TaskManagerNode(Node):
         self.create_subscription(String, self.feedback_topic, self._on_arm_feedback, 10)
         self.create_subscription(Bool, "/task/reset", self._on_reset, 10)
         self.create_subscription(String, "/task/start", self._on_start, 10)
+        # 仪表盘结果记忆（语音播报时存储）→ 放置目标直接来自存储的记忆
+        self.create_subscription(String, "/inspection/gauge_memory", self._on_gauge_memory, 10)
 
         self.trigger_type = None
         self.grasp_client = None
@@ -236,13 +251,80 @@ class TaskManagerNode(Node):
         if zones:
             self.abnormal_zones = zones[: self.max_abnormal_zones]
 
+    def _on_gauge_memory(self, msg: String) -> None:
+        """仪表盘结果记忆（语音播报时存储）→ 异常区域即放置目标。"""
+        try:
+            data = json.loads(msg.data)
+            zones = data.get("abnormal_zones", []) if isinstance(data, dict) else []
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"gauge_memory parse failed: {exc}")
+            return
+        zones = [normalize_zone(z) for z in zones]
+        zones = [z for z in zones if z]
+        if zones:
+            self.abnormal_zones = zones[: self.max_abnormal_zones]
+            self.pub_targets.publish(String(data=",".join(self.abnormal_zones)))
+            self.get_logger().info(f"abnormal_zones (from gauge_memory)={self.abnormal_zones}")
+
     def _on_placement_zone(self, msg: String) -> None:
-        # Placement-zone matching is handled by navigation waypoints in this
-        # final FSM. This callback is kept for observability and future camera
-        # fine alignment.
+        """放置区字母识别结果 → 与记忆中的异常目标比对，匹配才松爪放置。
+
+        放置流程: GO_PLACE 到达 → 请求视觉识别字母 → 本回调比对:
+          - 字母 == 当前目标异常区 → 确认，执行放置
+          - 字母 != 目标 / none → 重试（PLACEMENT_ZONE_RETRIES 次）后按航点兜底放置
+        非确认阶段收到字母仅打日志（观察用）。
+        """
         zone = normalize_zone(msg.data)
-        if zone:
-            self.get_logger().info(f"placement camera sees zone {zone}")
+        if not self._place_zone_pending:
+            if zone:
+                self.get_logger().info(f"placement camera sees zone {zone}")
+            return
+        if not zone:
+            self.get_logger().warn("place zone confirm: 识别到 none，重试")
+            self._place_zone_retry("none")
+            return
+        target = self.abnormal_zones[self.target_index] if self.target_index < len(self.abnormal_zones) else ""
+        if zone == target:
+            self.get_logger().info(
+                f"═══════════════════════════════════════\n"
+                f"  ★ 放置区字母 {zone} == 目标 {target}（记忆异常）→ 确认放置 ★\n"
+                "═══════════════════════════════════════")
+            self._place_zone_pending = False
+            self._start_place()
+        else:
+            self.get_logger().warn(
+                f"place zone confirm: 识别字母 {zone} != 目标 {target}（异常区），重试")
+            self._place_zone_retry(f"mismatch {zone}!={target}")
+
+    def _place_zone_retry(self, reason: str) -> None:
+        self._place_zone_retries += 1
+        if self._place_zone_retries > PLACEMENT_ZONE_RETRIES:
+            self.get_logger().error(
+                f"place zone confirm 失败({reason}) {PLACEMENT_ZONE_RETRIES} 次，按航点兜底放置")
+            self._place_zone_pending = False
+            self._start_place()
+            return
+        self.get_logger().info(f"place zone confirm retry {self._place_zone_retries}/{PLACEMENT_ZONE_RETRIES}")
+        self._request_place_zone_vision()
+
+    def _request_place_zone_vision(self) -> None:
+        self._place_zone_started_at = self._now()
+        self.get_logger().info(
+            f"请求放置区字母识别 (attempt {self._place_zone_retries + 1})")
+        if self.dry_run:
+            # dry-run 无法真识别，直接按航点放置
+            self._place_zone_pending = False
+            self._start_place()
+        else:
+            self.pub_vision_request.publish(String(data="zone"))
+
+    def _check_place_zone_timeout(self) -> None:
+        """放置区字母确认超时兜底：超过 PLACEMENT_ZONE_TIMEOUT_SEC 直接按航点放置。"""
+        if self._now() - self._place_zone_started_at > PLACEMENT_ZONE_TIMEOUT_SEC:
+            self.get_logger().warn(
+                f"place zone confirm timeout ({PLACEMENT_ZONE_TIMEOUT_SEC}s)，按航点兜底放置")
+            self._place_zone_pending = False
+            self._start_place()
 
     def _on_vision_pose(self, msg: String) -> None:
         if self.arm_request is None or not self.arm_request.waiting_for_vision:
@@ -363,6 +445,11 @@ class TaskManagerNode(Node):
                     self._retry_or_fail_arm()
             return
 
+        # 放置区字母确认超时 → 按航点兜底放置（不卡死）
+        if self._place_zone_pending:
+            self._check_place_zone_timeout()
+            return
+
         if self.state == State.WAIT_INSPECTION:
             if self.dry_run and not self.abnormal_zones:
                 self.inspection_all = "A:abnormal,B:normal,C:abnormal,D:normal"
@@ -400,7 +487,7 @@ class TaskManagerNode(Node):
             else:
                 self._start_grasp()
         elif self.state == State.GO_PLACE:
-            self._start_place()
+            self._on_place_arrival()
         elif self.state == State.GO_FINISH:
             self._done()
 
@@ -441,6 +528,24 @@ class TaskManagerNode(Node):
         if self._call_place_service_if_ready(zone):
             return
         self._publish_place_command(zone)
+
+    def _on_place_arrival(self) -> None:
+        """到达放置区：先做相机字母确认（与记忆中的异常目标一致才放），失败兜底。"""
+        self.state = State.PLACE
+        if not self.abnormal_zones:
+            self.get_logger().warn("place arrival but no abnormal_zones")
+            self._go_finish_or_done()
+            return
+        if not self.place_visual_confirm:
+            self.get_logger().info("place_visual_confirm=false，按航点直接放置")
+            self._start_place()
+            return
+        self._place_zone_pending = True
+        self._place_zone_retries = 0
+        self._place_zone_started_at = self._now()
+        self.get_logger().info(
+            f"到达放置区，等待字母确认 (目标={self.abnormal_zones[self.target_index]})")
+        self._request_place_zone_vision()
 
     def _call_grasp_service_if_ready(self) -> bool:
         if not self.use_services or self.grasp_client is None or not self.grasp_client.service_is_ready():
@@ -752,6 +857,10 @@ class TaskManagerNode(Node):
         self._last_seen_cx = None
         self._rollback_count = 0
         self._grasp_pose = None
+        # 放置区确认状态清零
+        self._place_zone_pending = False
+        self._place_zone_retries = 0
+        self._place_zone_started_at = 0.0
         self._publish_cone(False)
         self._publish_stop(True)
         self.pub_goal.publish(String(data=""))
