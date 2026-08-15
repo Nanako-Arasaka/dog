@@ -93,6 +93,7 @@ class BridgeInputPublisher:
         self._placement_pub = None
         self._task_status_sub = None
         self._placement_stage = False
+        self._inspection_stage = False
         self._owns_rclpy_context = False
 
         if os.environ.get("INSPECTION_BRIDGE_DISABLE", "").lower() in {"1", "true", "yes"}:
@@ -129,6 +130,11 @@ class BridgeInputPublisher:
     def publish_inspection(self, zone_name: str, gauge_result: dict, zone_conf: float, gauge_conf: float) -> None:
         if not self.enabled:
             return
+        # ★ 巡检结果只在 FSM 进入 WAIT_INSPECTION(狗到达巡检点)后才发布
+        # 狗在出发点/路上时相机碰巧看到的 zone+gauge 不会污染 FSM 的 abnormal_zones
+        allow_always = os.environ.get("INSPECTION_INSPECTION_ALWAYS", "").lower() in {"1", "true", "yes"}
+        if not self._inspection_stage and not allow_always:
+            return
         status = gauge_result.get("status", "unknown")
         payload = {
             "zone": zone_name,
@@ -159,6 +165,7 @@ class BridgeInputPublisher:
     def _on_task_status(self, msg: Any) -> None:
         text = str(getattr(msg, "data", ""))
         self._placement_stage = "WAITING_PLACE_ZONE" in text
+        self._inspection_stage = "WAIT_INSPECTION" in text or "INSPECTION_PROGRESS" in text
 
     def _spin_once(self) -> None:
         if self._rclpy is not None and self._node is not None:

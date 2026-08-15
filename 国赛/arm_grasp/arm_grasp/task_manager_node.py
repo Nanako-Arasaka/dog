@@ -247,6 +247,10 @@ class TaskManagerNode(Node):
             self._handle_arrival(name)
 
     def _on_inspection_all(self, msg: String) -> None:
+        # ★ 只在 WAIT_INSPECTION(狗到达巡检点)时消费巡检结果
+        # 狗在出发点/路上时 bridge 发布的旧结果不会污染 abnormal_zones
+        if self.state != State.WAIT_INSPECTION:
+            return
         self.inspection_all = msg.data.strip()
         zones = self._parse_abnormal_zones(self.inspection_all)
         if zones is not None:
@@ -260,6 +264,8 @@ class TaskManagerNode(Node):
             self.get_logger().info(f"abnormal_zones={self.abnormal_zones}")
 
     def _on_target_zones(self, msg: String) -> None:
+        if self.state != State.WAIT_INSPECTION:
+            return
         zones = [normalize_zone(item) for item in msg.data.split(",")]
         zones = [zone for zone in zones if zone]
         if zones and not self._place_zone_pending:
