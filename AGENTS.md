@@ -353,3 +353,42 @@ DashboardCameraDetector：
 - `class_names=["high", "normal", "low"]`
 
 这些参数针对近处识别优化，远处识别需要另外一套参数组合（见 05-13 记录）。
+
+## 2026-08-13 修改记录：国赛 AprilTag 定位兜底系统（国赛/ 目录）
+
+### 架构
+
+SLAM 主源 + AprilTag 绝对定位兜底，watchdog 仲裁后输出融合位姿：
+
+```
+/camera_pose (SLAM) ──┐
+                      ├─ localization_watchdog ─→ /camera_pose_fused ─→ waypoint_navigator
+/tag_localizer/pose ──┘
+```
+
+| 文件 | 内容 |
+|------|------|
+| `国赛/nodes/localization_watchdog.py` | 双源仲裁：SLAM 优先，超时/跳变切 tag，跳变抑制 + 切换迟滞 + 故障宽限期 |
+| `国赛/nodes/tag_localizer_node.py` | AprilTag（tag36h11）检测 → 相机世界位姿，官方库优先、OpenCV ArUco 降级 |
+| `国赛/tools/calibrate_tags.py` | 现场标定 tag 世界坐标（SLAM 位姿 + 检测反解），含 `--verify` 验证模式与 `--self-test` |
+| `国赛/config/tags.yaml` | 10 个 tag 模板，坐标必须现场标定，贴墙 tag pitch=±90（0 是平放） |
+| `国赛/config/guosai_final.yaml` | 新增 `tag_localizer` 段；`slam.fused_pose_topic` 供 navigator 订阅 |
+
+### 关键约定
+
+- `tag_localizer.enabled: false` 保持关闭，直到 `calibrate_tags.py` 标定 + `--verify` 通过才置 true
+- watchdog 判故障前必须双源同时不可用且超过 `fault_grace_sec`，单源被 tag 兜住不打死比赛
+- 标定方程与节点运行时方程互逆（`tools/calibrate_tags.py --self-test` 守护）：
+  - 标定：`R_w_tag = R_wc @ R_ct`，`p_w_tag = t_wc + R_wc @ t_ct`
+  - 运行时：`R_wc = R_w_tag @ R_ctᵀ`，`t_wc = p_w_tag - R_wc @ t_ct`
+
+### 修复的 bug（tag_localizer_node.py）
+
+1. 官方 apriltag 库只有 `detect(gray, camera_params=..., tag_size=...)` 才解算位姿；旧代码只设 detector 属性、`pose_t/pose_R` 永远为空，检出的 tag 全被丢弃
+2. OpenCV 降级后端 tag 尺寸硬编码 0.20、`_camera_matrix` 未初始化即引用；改用 `solvePnP(IPPE_SQUARE)` 替代废弃的 `estimatePoseSingleMarkers`，按 tag 各自尺寸解算
+
+### 验证状态
+
+- watchdog 6 个仲裁场景单测通过（稳定/兜底接管/恢复回切/双丢故障/短间隙存活/跳变抑制）
+- `calibrate_tags.py --self-test` 通过（欧拉角往返、标定-运行时方程互逆、旋转平均抗噪）
+- 待现场执行：实机标定 10 个 tag → `--verify` 平均误差 ≤10cm/5° → 开 `enabled`
