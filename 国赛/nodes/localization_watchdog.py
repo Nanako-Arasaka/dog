@@ -133,6 +133,7 @@ class PoseTrack:
 class LocalizationWatchdog(Node):
     def __init__(self) -> None:
         super().__init__("localization_watchdog")
+        self._log_warn = self.get_logger().get_child("fault")
         # --- SLAM source params (unchanged names, backward compatible) ---
         self.declare_parameter("pose_topic", "/camera_pose")
         self.declare_parameter("pose_type", "pose_stamped")
@@ -229,7 +230,7 @@ class LocalizationWatchdog(Node):
         now = self.get_clock().now().nanoseconds * 1e-9
         event = track.update(pose, msg, now)
         if event == "jump":
-            self.get_logger().warn(f"{track.name} pose jump detected; distrusting {track.name} "
+            self._log_warn.warning(f"{track.name} pose jump detected; distrusting {track.name} "
                                    f"for {track.distrust_sec:.1f}s")
 
     # ------------------------------------------------------------------ tick
@@ -303,8 +304,10 @@ class LocalizationWatchdog(Node):
 
     def _publish_ok(self, ok: bool, reason: str) -> None:
         if ok != self.ok or reason != self.last_reason:
-            level = self.get_logger().info if ok else self.get_logger().warn
-            level(f"localization ok={ok}: {reason}")
+            if ok:
+                self.get_logger().info(f"localization ok={ok}: {reason}")
+            else:
+                self._log_warn.warning(f"localization ok={ok}: {reason}")
         self.ok = ok
         self.last_reason = reason
         self.ok_pub.publish(Bool(data=ok))

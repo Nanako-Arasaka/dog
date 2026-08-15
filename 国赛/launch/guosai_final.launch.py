@@ -46,6 +46,8 @@ def _py_node(root: Path, rel_path: str, params: dict, name: str, on_exit=None) -
     if params:
         cmd += ["--ros-args"]
         for key, value in params.items():
+            if isinstance(value, str) and value == "":
+                continue  # rclpy 无法解析空值参数 (如 openni_redist:=) —— 跳过
             cmd += ["-p", f"{key}:={value}"]
     return ExecuteProcess(
         cmd=cmd,
@@ -205,7 +207,7 @@ def _setup(context, *args, **kwargs):
                 "nodes/cone_avoidance_node.py",
                 {
                     "model": _expand(cone.get("model", ""), root),
-                    "camera": cone.get("camera", "0"),
+                    "camera": "'" + str(cone.get("camera", "0")) + "'",
                     "conf": cone.get("conf", 0.35),
                     "send_hz": cone.get("send_hz", 10.0),
                     "enabled_topic": cone.get("enabled_topic", "/motion/enable_cone_avoidance"),
