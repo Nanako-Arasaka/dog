@@ -91,6 +91,13 @@ done
 export GUOSAI_ROOT="$ROOT_DIR"
 # orbslam3 install 缺可执行文件 (build 在 build/, install/lib 为空) → PATH hack
 export PATH="/home/jetson/colcon_ws/build/orbslam3:$PATH"
+# Astra 深度相机(抓取段)必需: OPENNI2_REDIST + LD_LIBRARY_PATH 都要, 缺一不可
+# (python openni ctypes 只认 LD_LIBRARY_PATH 找 libOpenNI2.so; SDK 用 OPENNI2_REDIST 找 liborbbec)
+if ls /home/jetson/openni2/OpenNI-Linux-Arm64-*/Redist/libOpenNI2.so >/dev/null 2>&1; then
+  export OPENNI2_REDIST="$(ls -d /home/jetson/openni2/OpenNI-Linux-Arm64-*/Redist | head -1)"
+  export LD_LIBRARY_PATH="$OPENNI2_REDIST:${LD_LIBRARY_PATH:-}"
+  echo "[INFO] OPENNI2_REDIST=$OPENNI2_REDIST"
+fi
 
 # ---------------------------------------------------------------- 硬件检查
 echo "==================== [0] 硬件检查 ===================="
