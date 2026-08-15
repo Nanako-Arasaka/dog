@@ -104,7 +104,7 @@ else
   echo "[OK] RealSense D435i 在线"
 fi
 
-# CH340 机械臂串口
+# CH340 机械臂串口 (无线/WiFi 模式下同样需要, 机械臂串口与连狗无关)
 if [[ -e /dev/ttyUSB0 ]]; then
   echo "[OK] /dev/ttyUSB0 存在 (CH340)"
   if [[ ! -w /dev/ttyUSB0 ]]; then
@@ -118,8 +118,31 @@ if [[ -e /dev/ttyUSB0 ]]; then
     fi
   fi
 else
-  echo "[FAIL] /dev/ttyUSB0 不存在 (CH340 未插/未加载) — modprobe ch34x 或 re-plug"
-  FAIL="${FAIL:+$FAIL }ttyusb"
+  echo "[WARN] /dev/ttyUSB0 不存在 — 尝试自动修复:"
+  # a. 驱动缺失 → 自动 modprobe (需 sudo)
+  if ! lsmod 2>/dev/null | grep -q ch34x; then
+    echo "      modprobe ch34x ..."
+    if sudo -n modprobe ch34x 2>/dev/null; then
+      echo "[OK] ch34x 驱动已加载"
+    else
+      echo "      (无法自动 modprobe, 需要 sudo 或手动执行)"
+    fi
+  fi
+  # b. 重新枚举设备 (拔插后 lsusb 出现 1a86:7523)
+  if lsusb 2>/dev/null | grep -q "1a86:7523"; then
+    echo "[OK] CH340 已枚举 (1a86:7523)"
+    sleep 1
+    if [[ ! -e /dev/ttyUSB0 ]]; then
+      echo "[FAIL] CH340 已枚举但无 /dev/ttyUSB0 — 检查 udev 规则或重插"
+      FAIL="${FAIL:+$FAIL }ttyusb"
+    else
+      echo "[OK] /dev/ttyUSB0 出现"
+      sudo -n chmod 666 /dev/ttyUSB0 2>/dev/null || true
+    fi
+  else
+    echo "[FAIL] CH340 未枚举 (lsusb 无 1a86:7523) — 请物理拔插 CH340 USB 线(两端)"
+    FAIL="${FAIL:+$FAIL }ttyusb"
+  fi
 fi
 
 # USB 声卡 (语音播报用, 非致命)
@@ -141,17 +164,14 @@ fi
 # ---------------------------------------------------------------- 网络检查 (连狗)
 echo ""
 echo "==================== [1] 网络检查 (连狗 $ROBOT_IP:$ROBOT_PORT) ===================="
-if command -v ip >/dev/null 2>&1; then
-  ETH_IF=$(ip -4 addr show 2>/dev/null | awk '/^[0-9]+: (eth|en|usb)/{iface=$2; sub(":","",iface)} /inet /{print iface}' | head -1)
+# 狗端 IP 可达性 —— 有线(eno1/usb0 配 192.168.1.x)或 WiFi(同网段)只要 ping 通即可
+if ping -c 1 -W 1 "$ROBOT_IP" >/dev/null 2>&1; then
+  echo "[OK] 狗端 $ROBOT_IP 可达 (ping 通, 有线或 WiFi 均可)"
 else
-  ETH_IF=""
-fi
-if [[ -n "$ETH_IF" ]]; then
-  ETH_IP=$(ip -4 addr show "$ETH_IF" 2>/dev/null | awk '/inet /{print $2}' | head -1)
-  echo "[OK] 有线网口 $ETH_IF 存在, IP=$ETH_IP"
-else
-  ETH_IP=""
-  echo "[WARN] 未找到有线网口 (eth/en/usb) — 连狗需要有线以太网"
+  echo "[WARN] 狗端 $ROBOT_IP 不可达 (ping 失败)"
+  echo "      检查: Jetson 与狗同网段 (WiFi 同 SSID / 有线直连 192.168.1.x)"
+  echo "      WiFi 场景用 --robot-ip 指定狗端 WiFi IP (如 --robot-ip 192.168.31.50)"
+  echo "      lite2_receiver 仍会启动, 狗上线后自动接管"
 fi
 
 if [[ "$DRY_RUN" == "true" ]]; then
@@ -168,14 +188,6 @@ if [[ -n "$FAIL" ]]; then
   echo "       修复后重跑本脚本。"
   echo "======================================================"
   exit 1
-fi
-
-# ping 狗端 (软检查, 狗没开机也能继续但会警告)
-if ping -c 1 -W 1 "$ROBOT_IP" >/dev/null 2>&1; then
-  echo "[OK] 狗端 $ROBOT_IP 可达"
-else
-  echo "[WARN] 狗端 $ROBOT_IP 不可达 (ping 失败) — 确认: 有线网线已插 / 狗端开机 / Jetson 网口 IP 在 192.168.1.x 段"
-  echo "      脚本继续 (lite2_receiver 会持续重发心跳, 狗上线即接管)"
 fi
 
 # ---------------------------------------------------------------- 起 SLAM 栈 (RealSense + ORB)
