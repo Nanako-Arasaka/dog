@@ -106,11 +106,13 @@ cone_avoidance:
 inspection:
   # 正式链路用 7 类模型(live_detect.py + best_7class.pt)。
   # 5 类版本(live_detect_yolo_opencv.py + best.pt)已淘汰——单独测试效果差。
+  # camera-id/path: 巡检 USB 相机(2bc5:0511), 现场枚举为 /dev/video1 (2026-08-15 实测;
+  # 曾为 /dev/video4, USB 枚举顺序变化后漂移)
   live_detect_command: >-
     python3 live_detect.py
     --model ${GUOSAI_ROOT}/best_7class.pt
-    --camera-id 4
-    --camera-path /dev/video4
+    --camera-id 1
+    --camera-path /dev/video1
     --no-gui
     --no-stream
   bridge_log_path: output/integration_bridge/final_events.jsonl
@@ -175,7 +177,10 @@ fsm:
     C: place_C
     D: place_D
   final_waypoint: finish
-  max_abnormal_zones: 2
+  max_abnormal_zones: 0
+  # 2026-08-15 现场: astra 深度相机读取失败 → 暂停抓取, 导航+巡检优先
+  # 0 = FSM 认为无异常箱 → GO_PICK 直接跳过 GRASP/PLACE 去 finish, 流程不卡死
+  # 恢复抓取: 改回 2 + 修好 astra 深度(OPENNI2_REDIST+LD_LIBRARY_PATH) + 去掉 --no-arm
   # 放置区字母确认：到达放置区后先识别字母，与记忆中的异常目标一致才松爪；
   # false 退化为纯航点对齐（原行为）
   place_visual_confirm: true
