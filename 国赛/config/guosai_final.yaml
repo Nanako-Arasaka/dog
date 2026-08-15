@@ -154,6 +154,9 @@ voice_broadcast:
   detailed_topic: /inspection/all_detailed   # 主用（low/normal/high，保留偏低/偏高）
   state_topic: /competition/state
   playback_log_path: ${GUOSAI_ROOT}/output/voice_broadcast/playback.tsv
+  # 仪表盘结果记忆存储文件：播报 A/B/C/D 状态时同步写入（黄/红=异常，绿=正常），
+  # 供夹取-放置阶段查询哪些箱子异常；新一轮比赛前发 /inspection/gauge_memory_reset 清空
+  memory_path: ${GUOSAI_ROOT}/output/gauge_memory.json
   device: ""            # aplay 声卡, 如 plughw:2,0 (亚博 USB 免驱声卡, 插上后 aplay -l 查卡号); 空=系统默认卡
 
 fsm:
