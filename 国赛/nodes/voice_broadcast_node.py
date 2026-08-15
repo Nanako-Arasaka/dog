@@ -185,8 +185,6 @@ class VoiceBroadcastNode(Node):
     # ---- 订阅回调 ----
 
     def _on_inspection_detailed(self, msg: String) -> None:
-        if not self.enabled:
-            return
         text = (msg.data or "").strip()
         if not text or not self._armed:
             return
@@ -195,8 +193,6 @@ class VoiceBroadcastNode(Node):
 
     def _on_inspection_fallback(self, msg: String) -> None:
         # 仅当 detailed 本轮没来过时，才用 /inspection/all 兜底（abnormal 无法区分偏低/偏高）
-        if not self.enabled:
-            return
         if self._got_detailed_this_round:
             return
         text = (msg.data or "").strip()
@@ -240,6 +236,12 @@ class VoiceBroadcastNode(Node):
             key = f"{z}_{STATE_TO_KEY.get(st, st)}"
             plan.append(key)
         self.get_logger().info(f"broadcast plan (source={source}): {plan}")
+        # enabled=False 时只写记忆不播声音（静默模式：debug/CI 用）
+        if not self.enabled:
+            self.get_logger().info(
+                f"[silent mode] gauge memory stored but playback skipped (plan={plan})"
+            )
+            return
         threading.Thread(target=self._play_plan, args=(plan,), daemon=True).start()
 
     def _on_memory_reset(self, msg: Bool) -> None:
