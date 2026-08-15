@@ -39,7 +39,7 @@ usage() {
   bash scripts/start_competition_full.sh [options]
 
 选项:
-  --robot-ip IP        狗端 Lite2 主机 IP (默认 192.168.1.120)
+  --robot-ip IP        狗端 Lite2 主机 IP (固定 192.168.1.120, 传参也会被强制改回)
   --robot-port PORT    狗端命令端口 (默认 43893)
   --listen-port PORT   本机 UDP 监听端口 (默认 5005, 与 motion_mux 一致)
   --dry-run            只做硬件/网络/权限检查,不起任何进程
@@ -67,6 +67,14 @@ while [[ $# -gt 0 ]]; do
     *) echo "[ERROR] 未知选项: $1" >&2; usage; exit 2 ;;
   esac
 done
+
+# ── 强制固定狗运动主机 IP(2026-08-15 确认: 狗运动主机 UDP = 192.168.1.120)──
+# 之前误传 --robot-ip 192.168.1.101(那是狗热点 IP)导致指令发错地址、狗不动。
+# 现在无论传什么参数, 一律强制改回 192.168.1.120。
+if [[ "$ROBOT_IP" != "192.168.1.120" ]]; then
+  echo "[WARN] --robot-ip 收到 $ROBOT_IP — 狗运动主机固定 192.168.1.120, 已强制改回"
+  ROBOT_IP="192.168.1.120"
+fi
 
 mkdir -p /tmp/slam_logs "$ROOT_DIR/logs"
 
@@ -171,14 +179,15 @@ fi
 # ---------------------------------------------------------------- 网络检查 (连狗)
 echo ""
 echo "==================== [1] 网络检查 (连狗 $ROBOT_IP:$ROBOT_PORT) ===================="
-# 狗端 IP 可达性 —— 有线(eno1/usb0 配 192.168.1.x)或 WiFi(同网段)只要 ping 通即可
+# 狗运动主机 IP 固定 192.168.1.120, Jetson 必须连狗热点(192.168.1.x 段)才能到达
 if ping -c 1 -W 1 "$ROBOT_IP" >/dev/null 2>&1; then
-  echo "[OK] 狗端 $ROBOT_IP 可达 (ping 通, 有线或 WiFi 均可)"
+  echo "[OK] 狗运动主机 $ROBOT_IP 可达 (ping 通)"
 else
-  echo "[WARN] 狗端 $ROBOT_IP 不可达 (ping 失败)"
-  echo "      检查: Jetson 与狗同网段 (WiFi 同 SSID / 有线直连 192.168.1.x)"
-  echo "      WiFi 场景用 --robot-ip 指定狗端 WiFi IP (如 --robot-ip 192.168.31.50)"
-  echo "      lite2_receiver 仍会启动, 狗上线后自动接管"
+  echo "[WARN] 狗运动主机 $ROBOT_IP 不可达 (ping 失败)"
+  echo "      必须: Jetson 连狗热点(192.168.1.x 段)后 120 才能通"
+  echo "      检查: nmcli dev wifi list → 连狗热点 → ip addr 确认 192.168.1.x"
+  echo "      注意: 狗热点 IP 是 192.168.1.101, 运动主机是 192.168.1.120 — 别搞混"
+  echo "      lite2_receiver 仍会启动, 狗热点连上后自动接管"
 fi
 
 if [[ "$DRY_RUN" == "true" ]]; then
