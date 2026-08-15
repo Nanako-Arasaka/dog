@@ -109,8 +109,9 @@ class MiniSpeaker:
             if self.engine == "mock":
                 print(f"[voice][mock] play {key}.wav")
             elif self.engine == "aplay":
-                dev = f"-D {self.device} " if self.device else ""
-                os.system(f'aplay -q {dev}"{fpath}"')
+                # 用 paplay 走 PulseAudio（Jetson 上 PA 占着 /dev/snd/controlC2，
+                # 直 aplay -D plughw:2,0 拿不到硬件，PCM 状态始终 closed 无声）
+                os.system(f'paplay --volume=65536 "{fpath}"')
             elif self.engine == "ffplay":
                 os.system(f"ffplay -nodisp -autoexit -loglevel quiet {fpath}")
             self._log(key, "played")
