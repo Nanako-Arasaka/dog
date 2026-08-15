@@ -264,10 +264,54 @@ def configure_camera_exposure(camera_path: str) -> None:
 
 CAMERA_MAX_INDEX = 20  # 递增查找上限
 
+# 巡检相机目标: 优先 video0(USB Camera 2bc5:0511, Astra RGB)。
+# 若被 astra_camera_node 占用 → kill 它(抓取可暂停, 巡检必须活着)。
+# 绝不 kill realsense2_camera(SLAM 命脉)!
+PROTECTED_CAMERA_PROCESSES = ("realsense2_camera", "orbslam3", "rgbd")
+
+
+def _kill_camera_occupier(video_path: str) -> bool:
+    """检测 /dev/videoN 被谁占用, 非保护进程则 kill, 返回是否处理了占用。"""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["fuser", "-v", video_path], capture_output=True, text=True, timeout=5
+        ).stderr
+    except Exception:  # noqa: BLE001
+        return False
+    if not out:
+        return False
+    pids = []
+    for token in out.replace("\n", " ").split():
+        if token.isdigit():
+            pids.append(int(token))
+    killed = False
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmdline = f.read().decode(errors="ignore").replace("\x00", " ")
+        except Exception:  # noqa: BLE001
+            continue
+        if any(p in cmdline for p in PROTECTED_CAMERA_PROCESSES):
+            print(f"[WARN] {video_path} 被保护进程占用 (PID {pid}: {cmdline[:60]}), 不 kill")
+            continue
+        print(f"[INFO] {video_path} 被占用 (PID {pid}: {cmdline[:60]}) — kill 释放")
+        try:
+            import os
+            os.kill(pid, 9)
+            killed = True
+        except Exception:  # noqa: BLE001
+            pass
+    if killed:
+        time.sleep(0.5)  # 等设备释放
+    return killed
+
 
 def open_camera_with_fallback(start_id: int) -> cv2.VideoCapture:
     """从 start_id 开始递增尝试打开摄像头, 找到第一个能出图的设备。
 
+    - 打不开时检测占用: 非保护进程(astra_camera_node 等)直接 kill 释放
     - /dev/videoN 有 metadata 节点(如 video1)打开后 read 永远 False, 必须实测 read
     - 打不开/读不出帧就试下一个 index, 直到 CAMERA_MAX_INDEX
     """
@@ -275,7 +319,12 @@ def open_camera_with_fallback(start_id: int) -> cv2.VideoCapture:
         cap = open_camera(camera_id)
         if not cap.isOpened():
             cap.release()
-            continue
+            # 被占用 → kill 占用者后重试一次
+            _kill_camera_occupier(f"/dev/video{camera_id}")
+            cap = open_camera(camera_id)
+            if not cap.isOpened():
+                cap.release()
+                continue
         # 实测能否读出帧 —— metadata 节点 opened=True 但 read 永远失败
         ret, _ = cap.read()
         if not ret:
@@ -297,6 +346,60 @@ def open_camera(camera_id: int) -> cv2.VideoCapture:
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
     return cap
+
+
+class RosColorReader:
+    """订阅 ROS 图像话题取帧(替代 V4L2)。
+
+    RealSense 已占用 video2-7 的 V4L2 节点时, cv2.VideoCapture 打不开;
+    巡检直接订阅 /camera/camera/color/image_raw 零冲突复用同一路图像。
+    """
+
+    def __init__(self, topic: str) -> None:
+        self._frame = None
+        self._ok = False
+        self._node = None
+        self._thread = None
+        self._rclpy = None
+        try:
+            import rclpy
+            from cv_bridge import CvBridge
+            from sensor_msgs.msg import Image
+        except ImportError as exc:
+            print(f"[WARN] RosColorReader unavailable: {exc}")
+            return
+        try:
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self._rclpy = rclpy
+            self._node = rclpy.create_node("inspection_color_reader")
+            self._bridge = CvBridge()
+            self._node.create_subscription(Image, topic, self._cb, 10)
+            self._thread = threading.Thread(target=rclpy.spin, args=(self._node,), daemon=True)
+            self._thread.start()
+            self._ok = True
+            print(f"[INFO] subscribed ROS color topic: {topic}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] RosColorReader init failed: {exc}")
+
+    def _cb(self, msg) -> None:
+        try:
+            self._frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def read(self) -> tuple[bool, object]:
+        if not self._ok or self._frame is None:
+            return False, None
+        return True, self._frame
+
+    def close(self) -> None:
+        if self._node is not None and self._rclpy is not None:
+            self._node.destroy_node()
+            self._node = None
+        if self._rclpy is not None and self._rclpy.ok():
+            self._rclpy.shutdown()
+        self._ok = False
 
 
 # ───────────────── 绘制工具 ─────────────────
@@ -401,6 +504,7 @@ def main() -> None:
     parser.add_argument("--model", default=MODEL_PATH, help=f"YOLO model path (default: {MODEL_PATH})")
     parser.add_argument("--camera-id", type=int, default=CAMERA_ID, help=f"Camera index (default: {CAMERA_ID})")
     parser.add_argument("--camera-path", default=CAMERA_PATH, help=f"V4L2 device path (default: {CAMERA_PATH})")
+    parser.add_argument("--color-topic", default="", help="Subscribe ROS image topic instead of V4L2 (e.g. /camera/camera/color/image_raw)")
     parser.add_argument("--port", type=int, default=STREAM_PORT, help=f"Streaming port (default: {STREAM_PORT})")
     parser.add_argument("--no-gui", action="store_true", help="Disable local OpenCV windows")
     parser.add_argument("--no-stream", action="store_true", help="Disable MJPEG streaming")
@@ -421,11 +525,20 @@ def main() -> None:
         print(f"  Actual:   {class_names}")
     print(f"[INFO] Model classes: {class_names}")
 
-    # 相机递增回退: 从 camera_id 开始试, 打不开/metadata 节点就试下一个, 不直接退出
-    cap = open_camera_with_fallback(args.camera_id)
-    if not cap.isOpened():
-        print(f"[ERROR] Failed to open any camera starting from index {args.camera_id}")
-        sys.exit(1)
+    # 相机源: 优先 ROS 话题订阅(RealSense 已占用 V4L2 时唯一可行方案),
+    # 否则 V4L2 递增回退。
+    cap = None
+    ros_reader = None
+    if args.color_topic:
+        ros_reader = RosColorReader(args.color_topic)
+        if not ros_reader._ok:
+            print(f"[WARN] ROS color topic 订阅失败, 回退 V4L2")
+            ros_reader = None
+    if ros_reader is None:
+        cap = open_camera_with_fallback(args.camera_id)
+        if not cap.isOpened():
+            print(f"[ERROR] Failed to open any camera starting from index {args.camera_id}")
+            sys.exit(1)
 
     frame_buffer = FrameBuffer()
     MJPEGHandler.frame_buffer = frame_buffer
@@ -455,10 +568,16 @@ def main() -> None:
 
     try:
         while True:
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                print("[ERROR] Failed to read frame from camera")
-                break
+            if ros_reader is not None:
+                ret, frame = ros_reader.read()
+                if not ret or frame is None:
+                    time.sleep(0.05)
+                    continue
+            else:
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    print("[ERROR] Failed to read frame from camera")
+                    break
 
             now = time.time()
             fps = 1.0 / max(now - prev_time, 1e-6)
@@ -576,7 +695,10 @@ def main() -> None:
         print("\n[INFO] Interrupted by user")
     finally:
         bridge_publisher.close()
-        cap.release()
+        if ros_reader is not None:
+            ros_reader.close()
+        if cap is not None:
+            cap.release()
         cv2.destroyAllWindows()
         if stream_server:
             stream_server.shutdown()

@@ -114,14 +114,14 @@ cone_avoidance:
 inspection:
   # 正式链路用 7 类模型(live_detect.py + best_7class.pt)。
   # 5 类版本(live_detect_yolo_opencv.py + best.pt)已淘汰——单独测试效果差。
-  # camera-id/path: 巡检识别用 RealSense(/dev/video4, 2026-08-15 实测 5/5 帧稳定出图 640x480)。
-  # video0/1 是 Astra RGB(2bc5:0511, 抓取视觉用)—— 巡检必须避开, 否则与 astra_camera_node 抢设备。
-  # live_detect.py 内置递增回退: 若 video4 打不开/读不出帧会自动试后续节点, 不崩溃。
+  # 相机源: video0(USB Camera 2bc5:0511)。若被 astra_camera_node 占用,
+  # live_detect 自动 kill 占用者释放(抓取可暂停, 巡检必须活着)。
+  # realsense2_camera/orbslam3 是保护进程, 绝不 kill。
   live_detect_command: >-
     python3 live_detect.py
     --model ${GUOSAI_ROOT}/best_7class.pt
-    --camera-id 4
-    --camera-path /dev/video4
+    --camera-id 0
+    --camera-path /dev/video0
     --no-gui
     --no-stream
   bridge_log_path: output/integration_bridge/final_events.jsonl
