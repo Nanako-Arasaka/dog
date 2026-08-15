@@ -137,8 +137,13 @@ arm:
   max_retries: 3
   feedback_timeout_sec: 20.0
   # --- Astra/Orbbec 抓取相机 ---
-  camera_index: 0                 # RGB 设备号（/dev/video0）
-  depth_mode: auto                # auto | pyorbbec | openni | uvc | realsense | none（真实深度后端）
+  # 2026-08-15 修复: depth_mode auto → realsense。
+  # 原因: astra_camera_node 的 camera_index=0 打开 /dev/video0(巡检相机),
+  # 与 inspection_live_detect 抢同一设备 → 巡检 "No usable camera"。
+  # realsense 模式: astra 直接转发 RealSense 话题到 /rgbd_cam/*, 不打开本地 V4L2,
+  # 巡检相机归巡检独占; 抓取深度走 RealSense(OpenNI2 现场也失败, 此模式更稳)。
+  camera_index: 0                 # realsense 模式下不使用(RGB 由 RealSense 提供)
+  depth_mode: realsense           # auto | pyorbbec | openni | uvc | realsense | none(真实深度后端)
   depth_index: -1                 # UVC 深度设备号，-1=默认 camera_index+1
   fake_depth_fallback: false      # 深度不可用时禁止回退伪深度（正式比赛必须 false）
   openni_redist: ""               # OpenNI2 Redist 路径（空=自动探测 ~/openni2/OpenNI-Linux-*/Redist）
