@@ -1,6 +1,4 @@
-# 由 tools/calibrate_tags.py 现场标定（2026-08-14，仅保留 tag 1+2+3；
-# tag 4/5/6 采集时 ORB-SLAM3 失跟，4 个点聚在 SLAM 原点 0.5m³ 内——同
-# 604c8c3 脏 waypoint 根因——已抹掉待重采）
+# 由 tools/calibrate_tags.py 于 2026-08-15 14:31:54 现场标定生成
 # 世界系 = ORB-SLAM3 建图时的世界系（与 /camera_pose 一致）
 # 手动改动前请先备份；重新标定直接再跑一次本工具即可
 tag_family: tag36h11
@@ -9,50 +7,50 @@ tags:
 - id: 1
   name: 点一
   size_m: 0.18
-  world: {x: 0.083, y: -0.082, z: 0.7176, yaw_deg: 176.43, pitch_deg: 0.79, roll_deg: 51.8}
+  world: {x: 0.0236, y: 0.1384, z: 0.5945, yaw_deg: 175.55, pitch_deg: 3.79, roll_deg: 64.45}
   note: 出发区右侧 - 对应 start_exit 附近
 - id: 2
   name: 点二
   size_m: 0.18
-  world: {x: -0.3694, y: -0.7073, z: 1.6528, yaw_deg: 166.68, pitch_deg: 10.13, roll_deg: 53.3}
+  world: {x: -0.3417, y: -0.6752, z: 2.3384, yaw_deg: 175.92, pitch_deg: 3.26, roll_deg: 64.24}
   note: 出发区中央
 - id: 3
   name: 点三
   size_m: 0.18
-  world: {x: 0.403, y: -0.3012, z: 1.0009, yaw_deg: -148.09, pitch_deg: -35.45, roll_deg: 41.34}
+  world: {x: 0.2611, y: -1.6698, z: 4.3101, yaw_deg: -160.86, pitch_deg: -37.66, roll_deg: 55.96}
   note: 出发区左侧 - 收尾路径路标
 - id: 4
   name: 点四
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: 1.0073, y: -1.6219, z: 3.7193, yaw_deg: 96.56, pitch_deg: 60.71, roll_deg: -61.21}
   note: 仪表箱1 观察侧2 - inspection_box_1_side_2
 - id: 5
   name: 点五
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: 1.0563, y: -1.6305, z: 3.7085, yaw_deg: 90.38, pitch_deg: 61.22, roll_deg: -53.96}
   note: 仪表箱1 观察侧1 - inspection_box_1_side_1
 - id: 6
   name: 点六
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: 2.6082, y: -2.3563, z: 3.5803, yaw_deg: -22.75, pitch_deg: 10.38, roll_deg: -145.97}
   note: 障碍区入口 - obstacle_entry
 - id: 7
   name: 点七
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: -1.4007, y: 0.1859, z: -0.41, yaw_deg: -54.37, pitch_deg: 55.81, roll_deg: 146.37}
   note: 障碍区出口 - obstacle_exit（优先级最高，锥桶漂移救援）
 - id: 8
   name: 点八
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: 1.8643, y: -0.8212, z: -1.0464, yaw_deg: 124.6, pitch_deg: -56.85, roll_deg: 56.6}
   note: 仪表箱2 观察侧（归属待现场确认）
 - id: 9
   name: 点九
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: -1.6592, y: 0.1017, z: -0.7191, yaw_deg: 178.69, pitch_deg: 24.31, roll_deg: 36.08}
   note: 抓取区接近点 - pick_area
 - id: 10
   name: 点十
   size_m: 0.18
-  world: {x: 0.0, y: 0.0, z: 0.45, yaw_deg: 0.0, pitch_deg: 0.0, roll_deg: 0.0}
+  world: {x: -0.0124, y: -1.6631, z: -3.8269, yaw_deg: -2.52, pitch_deg: -21.02, roll_deg: 165.19}
   note: 放置区接近点 - place_A/B/C/D
