@@ -169,8 +169,8 @@ class VisionNode(Node):
                 w, h = h, w
                 angle += 90
             ratio = w / h if h > 0 else 0
-            # 长条宽高比范围 (长100mm / 宽50mm = 2.0, 允许 1.3~3.5)
-            if 1.3 < ratio < 3.5:
+            # 长条宽高比范围:放宽到 1.0~4.0 (2026-08-15 现场测试:实物 ratio 1.08~1.22,默认 1.3~3.5 误杀)
+            if 1.0 < ratio < 4.0:
                 objs.append({
                     'cx': int(cx), 'cy': int(cy),
                     'w': w, 'h': h, 'angle': angle,
@@ -184,11 +184,12 @@ class VisionNode(Node):
 
         中心窗口无有效深度(0=饱和/无回波)时，逐级扩大搜索窗口重试，
         取最近的有效深度。红条中心若为饱和 0，其本体/边缘通常仍有有效值。
+        OpenNI2 深度有效像素极稀疏(实测 0.08%),必须用大窗口 + 低阈值。
         """
         if self.depth_img is None:
             return 0
         h, w = self.depth_img.shape
-        for r in (radius, 12, 20):
+        for r in (radius, 20, 40, 60, 100):
             x1 = max(0, cx - r)
             x2 = min(w, cx + r + 1)
             y1 = max(0, cy - r)
@@ -196,8 +197,12 @@ class VisionNode(Node):
             if x2 <= x1 or y2 <= y1:
                 continue
             roi = self.depth_img[y1:y2, x1:x2]
-            valid = roi[(roi > 0) & (roi < 2500)]
-            if len(valid) > 0:
+            valid = roi[(roi > 0) & (roi < 8000)]
+            if len(valid) >= 1:  # OpenNI2 太稀疏，只要有 1 个有效深度就要
+                self.get_logger().info(
+                    f'深度采样: r={r} 有效像素={len(valid)} 中值={np.median(valid):.0f}mm '
+                    f'全图有效像素={int((self.depth_img[(self.depth_img>0)&(self.depth_img<8000)]).size)}'
+                )
                 return np.median(valid)
         return 0
 
