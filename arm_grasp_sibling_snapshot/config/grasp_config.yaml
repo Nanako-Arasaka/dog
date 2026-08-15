@@ -1,0 +1,115 @@
+# 机械臂长条抓取任务配置
+# 2026中国高校智能机器人创意大赛 - 四足大型组
+# 规则: 高台800×600×500mm, 长条100×50×50mm竖放(50×100mm底面)
+#       红色=异常(抓取), 绿色=正常(忽略)
+#       抓取悬空3秒 → 搬运到对应ABCD区 → 放置
+
+robot_config:
+  arm_type: "JetArm_6DOF"
+  max_reach: 0.50               # 臂展 ≤50cm
+  arm_weight: 2.0               # 重量 ≤2kg
+  dof: 6
+
+# ── 舵机 ID ──────────────────────────────
+servo_ids:
+  base: 1
+  shoulder: 2
+  elbow: 3
+  wrist1: 4
+  wrist2: 5
+  wrist3: 6
+  gripper: 10
+
+# ── 关节限位（脉冲值 0~1000）──────────────
+joint_limits:
+  base:    [0, 1000]
+  shoulder: [200, 800]
+  elbow:   [200, 850]
+  wrist1:  [200, 800]
+  wrist2:  [200, 800]
+  wrist3:  [200, 800]
+  gripper: [100, 500]   # 100=张开, 500=闭合抓紧 (舵机实际方向)
+
+# ── 夹爪参数 ─────────────────────────────
+gripper:
+  open: 100    # 张开 (舵机实际: 小值=张开)
+  close: 500   # 闭合抓紧 (舵机实际: 大值=闭合)
+
+# ── 长条物体 (100×50×50mm) ───────────────
+object_config:
+  length: 0.10
+  width: 0.05
+  height: 0.05
+  grasp_height: 0.075          # 抓取点高度(从桌面算, = 长条50mm + 余量)
+  hsv_ranges:
+    red:
+      lower: [0, 120, 100]
+      upper: [10, 255, 255]
+      lower2: [170, 120, 100]
+      upper2: [180, 255, 255]
+    green:
+      lower: [40, 80, 80]
+      upper: [85, 255, 255]
+
+# ── 抓取策略 ─────────────────────────────
+grasp_strategy:
+  approach_height: 0.20         # 从物体上方接近高度
+  pre_grasp_offset: 0.0        # 预抓取位置偏移(上方), 红条近距离设0
+  grasp_depth_offset: 0.02      # 抓取时向下多走一点(确保夹紧)
+  lift_height: 0.20             # 抓取后提升高度
+  depart_height: 0.25           # 搬运时离开高度
+
+# ── 姿态偏置 (避免大臂绷直) ──────────────
+# 数值为舵机脉冲值(0~1000), 关节限位由 clamps 保证
+posture_bias:
+  shoulder_back: 0             # 大臂向后偏移量 (0=不偏, 红条近距离用)
+  elbow_up: 0                  # 小臂向上偏移量 (0=不偏, 红条近距离用)
+
+# ── 高台 (800×600×500mm, 上表面距底座22cm) ──
+platform_config:
+  width: 0.8
+  depth: 0.6
+  height: 0.0        # 测试时设0, 上高台时改为0.22
+
+# ── 相机→机械臂基座变换 (需实测校准!) ─────
+camera_to_arm:
+  x: 0.255      # 相机在机械臂前方 (米)
+  y: -0.06         # 左右偏移 (物体偏右→继续增大y)
+  z: -0.55       # 相机→基座Z偏移(修正高度, 原-0.385偏高)
+
+# ── 机械臂基座→高台中心变换 (需实测校准!) ──
+arm_base_to_platform:
+  x: 0.25      # 机械臂基座在高台中心前方
+  y: 0.0
+  z: -0.50     # 基座在高台面下方 500mm
+
+# ── 放置区域(ABCD纸箱中心，相对高台面) ─────
+placement_zones:
+  A: {position: [0.20, 0.20, 0.0], size: 0.5}
+  B: {position: [0.20, -0.20, 0.0], size: 0.5}
+  C: {position: [-0.20, 0.20, 0.0], size: 0.5}
+  D: {position: [-0.20, -0.20, 0.0], size: 0.5}
+
+# ── 相机话题 ─────────────────────────────
+camera_topics:
+  color: "/rgbd_cam/color/image_rect_color"
+  depth: "/rgbd_cam/depth/image_raw"
+  info: "/rgbd_cam/color/camera_info"
+
+# ── 直抓模式: 观察姿态 (手臂移到不挡摄像头的位置) ──
+# 这些是机械臂基座坐标系的 IK 目标 (米)
+direct_grasp:
+  look_x: 0.20       # 观察位置: 前 (让摄像头能拍到桌面)
+  look_y: 0.0         # 观察位置: 左右
+  look_z: 0.15        # 观察位置: 高 (让摄像头朝下看)
+  look_angle: 0.0     # 观察位置: 角度
+  look_duration: 2.0  # 移到观察位置的时间
+
+# ── 评分规则 ─────────────────────────────
+scoring:
+  hold_time: 3.0                # 成功抓取需悬空3秒(比赛要求)
+  max_drops: 3                  # 掉落3次比赛结束
+  drop_penalty: -5
+  max_penalty: -10
+  total_grasps: 2               # 共需抓取2次
+  max_time: 600                 # 正赛10分钟
