@@ -31,7 +31,7 @@ RUNTIME_WAYPOINTS = "/home/jetson/Desktop/guosai/slam_maps/waypoints_FINAL.yaml"
 
 
 class WaypointWalker(Node):
-    def __init__(self, waypoints_yaml: str, goal_timeout: float) -> None:
+    def __init__(self, waypoints_yaml: str, goal_timeout: float, start_from: str = "") -> None:
         super().__init__("waypoint_walker")
         self.goal_timeout = goal_timeout
 
@@ -41,6 +41,14 @@ class WaypointWalker(Node):
         if not self.waypoints:
             self.get_logger().error("waypoints 为空!")
             self.waypoints = []
+        # 从指定航点开始(跳过之前的点, 用于调试/单段测试)
+        if start_from:
+            if start_from in self.waypoints:
+                idx = self.waypoints.index(start_from)
+                self.waypoints = self.waypoints[idx:]
+                self.get_logger().info(f"从 {start_from} 开始, 跳过前 {idx} 个点")
+            else:
+                self.get_logger().warn(f"start_from 不存在: {start_from}, 从开头走")
         self.get_logger().info(f"加载 {len(self.waypoints)} 个航点: {self.waypoints}")
 
         self.goal_pub = self.create_publisher(String, "/waypoint/goal", 10)
@@ -103,10 +111,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="独立走航点")
     parser.add_argument("--waypoints", default=RUNTIME_WAYPOINTS)
     parser.add_argument("--goal-timeout", type=float, default=60.0)
+    parser.add_argument("--start-from", default="", help="从指定航点开始, 跳过之前的点(调试用)")
     args = parser.parse_args()
 
     rclpy.init()
-    node = WaypointWalker(args.waypoints, args.goal_timeout)
+    node = WaypointWalker(args.waypoints, args.goal_timeout, args.start_from)
     rclpy.spin_once(node, timeout_sec=0)  # 预热
 
     try:

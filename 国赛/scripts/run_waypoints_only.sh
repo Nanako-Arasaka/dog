@@ -158,10 +158,11 @@ for i in $(seq 1 20); do
 done
 
 echo ""
-echo "=== [7] 开始走航点 ==="
+echo "=== [7] 开始走航点(从 obstacle_exit 开始, 避开 start_exit 距原点太近)==="
 python3 "$ROOT_DIR/scripts/waypoint_walker.py" \
   --waypoints /home/jetson/Desktop/guosai/slam_maps/waypoints_FINAL.yaml \
-  --goal-timeout "$GOAL_TIMEOUT"
+  --goal-timeout "$GOAL_TIMEOUT" \
+  --start-from obstacle_exit
 
 echo ""
 echo "=== 完成 ==="
