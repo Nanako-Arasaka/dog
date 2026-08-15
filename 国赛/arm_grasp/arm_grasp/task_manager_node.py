@@ -151,6 +151,9 @@ class TaskManagerNode(Node):
         self.last_status = ""
         self.started = False
         self._exit_timer = None
+        # 导航航点超时(秒): 某航点迟迟未到达时跳过继续, 不卡死主流程
+        self.nav_timeout_sec = float(fsm_cfg.get("nav_timeout_sec", 60.0))
+        self._nav_goal_started_at = 0.0
 
         # ── 抓取闭环策略状态 (对齐源码版) ──────
         self._grasp_retries = 0        # 当前物体空抓重试次数
@@ -479,6 +482,20 @@ class TaskManagerNode(Node):
         # 放置区字母确认超时 → 按航点兜底放置（不卡死）
         if self._place_zone_pending:
             self._check_place_zone_timeout()
+            return
+
+        # ── 导航航点超时: 某个 GO_* 航点迟迟未到达 → 跳过继续 (不卡死主流程) ──
+        if self.state in (
+            State.GO_START, State.GO_OBSTACLE_ENTRY, State.OBSTACLE_ZONE,
+            State.GO_INSPECTION, State.GO_PICK, State.GO_PLACE, State.GO_FINISH,
+        ):
+            elapsed = self._now() - self._nav_goal_started_at
+            if elapsed > self.nav_timeout_sec:
+                self.get_logger().warn(
+                    f"nav timeout: {self.state.value} goal={self.current_goal} "
+                    f"({elapsed:.0f}s > {self.nav_timeout_sec:.0f}s), skip and continue"
+                )
+                self._handle_arrival("__nav_timeout__")
             return
 
         if self.state == State.WAIT_INSPECTION:
@@ -846,6 +863,7 @@ class TaskManagerNode(Node):
             return
         self.current_goal = waypoint
         self.state = next_state
+        self._nav_goal_started_at = self._now()
         self.get_logger().info(f"go {waypoint} state={next_state.value}")
         if self.dry_run:
             self._handle_arrival(waypoint)
@@ -873,11 +891,46 @@ class TaskManagerNode(Node):
             )
 
     def _fail(self, reason: str) -> None:
+        # ── 容错: 非致命失败(抓取/放置/航点缺失) → 跳过当前目标继续, 不卡死 ERROR
+        # 致命失败(定位丢失) → ERROR 安全停(狗不能乱走)
+        skip = self._is_skippable_failure(reason)
+        if skip:
+            self.get_logger().warn(f"skip non-fatal failure: {reason} — 跳过当前目标继续")
+            self.arm_request = None
+            self._place_zone_pending = False
+            self.target_index += 1
+            if self.target_index >= len(self.abnormal_zones):
+                self._go_finish_or_done()
+            else:
+                self._go(self.pick_waypoint, State.GO_PICK)
+            return
         self.state = State.ERROR
         self._publish_cone(False)
         self._publish_stop(True)
         self.pub_goal.publish(String(data=""))
         self.get_logger().error(f"FINAL TASK ERROR: {reason}")
+
+    @staticmethod
+    def _is_skippable_failure(reason: str) -> bool:
+        """哪些失败可以跳过继续(不影响主流程安全)。"""
+        skippable = (
+            "grasp_empty_after_retries",
+            "grasp_failed_after_retries",
+            "arm_action_failed",
+            "place_failed_after_retries",
+            "place_no_zone",
+        )
+        if reason in skippable:
+            return True
+        # 缺失放置航点/缺失目标航点 → 跳过该目标 (不跳过 start/obstacle/finish 关键路径)
+        if reason.startswith("missing_place_waypoint_"):
+            return True
+        if reason.startswith("missing_waypoint_for_") and reason not in (
+            "missing_waypoint_for_GO_START",
+            "missing_waypoint_for_GO_FINISH",
+        ):
+            return True
+        return False
 
     def _auto_exit(self) -> None:
         self._publish_cone(False)

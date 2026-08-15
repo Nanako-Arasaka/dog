@@ -177,10 +177,13 @@ fsm:
     C: place_C
     D: place_D
   final_waypoint: finish
-  max_abnormal_zones: 0
-  # 2026-08-15 现场: astra 深度相机读取失败 → 暂停抓取, 导航+巡检优先
-  # 0 = FSM 认为无异常箱 → GO_PICK 直接跳过 GRASP/PLACE 去 finish, 流程不卡死
-  # 恢复抓取: 改回 2 + 修好 astra 深度(OPENNI2_REDIST+LD_LIBRARY_PATH) + 去掉 --no-arm
+  max_abnormal_zones: 2
+  nav_timeout_sec: 60.0
+  # 2026-08-15 容错策略: 任何子模块小问题跳过继续, 不卡死主流程
+  # - max_abnormal_zones=2: 允许抓取; 抓取失败(grasp_*/arm_action_failed)自动跳过该箱继续
+  # - nav_timeout_sec=60: 某航点 60s 未到达 → 跳过继续(不卡在 GO_* 状态)
+  # - 定位丢失(localization_lost)仍 ERROR 安全停(狗不能乱走)
+  # 巡检相机递增回退已在 live_detect.py; astra 深度失败由 --no-arm 或失败跳过兜底
   # 放置区字母确认：到达放置区后先识别字母，与记忆中的异常目标一致才松爪；
   # false 退化为纯航点对齐（原行为）
   place_visual_confirm: true
