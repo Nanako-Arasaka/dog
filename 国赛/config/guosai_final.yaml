@@ -148,7 +148,7 @@ arm:
 voice_broadcast:
   enabled: true
   audio_dir: ${GUOSAI_ROOT}/output/audio
-  engine: mock            # mock | aplay | ffplay  (Jetson 现场用 aplay)
+  engine: aplay           # mock | aplay | ffplay  (Jetson 现场用 aplay)
   gap_sec: 0.4
   result_topic: /inspection/all              # 兜底（abnormal/normal，无法区分偏低/偏高）
   detailed_topic: /inspection/all_detailed   # 主用（low/normal/high，保留偏低/偏高）
@@ -157,7 +157,7 @@ voice_broadcast:
   # 仪表盘结果记忆存储文件：播报 A/B/C/D 状态时同步写入（黄/红=异常，绿=正常），
   # 供夹取-放置阶段查询哪些箱子异常；新一轮比赛前发 /inspection/gauge_memory_reset 清空
   memory_path: ${GUOSAI_ROOT}/output/gauge_memory.json
-  device: ""            # aplay 声卡, 如 plughw:2,0 (亚博 USB 免驱声卡, 插上后 aplay -l 查卡号); 空=系统默认卡
+  device: "plughw:2,0"   # aplay 声卡 (C-Media USB Audio = card 2, device 0, 2026-08-15 现场实测)
 
 fsm:
   start_waypoint: start_exit
