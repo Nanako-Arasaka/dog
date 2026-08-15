@@ -103,6 +103,8 @@ flowchart LR
 **1. 巡检识别（40 分）**
 正式链路用 **7 类模型**（`live_detect.py` + `best_7class.pt`：zone_A/B/C/D + gauge_low/normal/high），状态直接来自 YOLO 分类 + 短窗口多数投票稳定（≥4/7 帧）；再用 `gauge_reader.py` 的 HSV 红色带检测做兜底纠正（YOLO 漏报 high 时）。`gauge_reader.py` 走经典 CV 管线读指针角度：灰度 → 高斯模糊 → CLAHE → Canny → 霍夫圆 → 霍夫直线 → HSV 色带分类，每一级都有降级兜底。稳定结果经 `BridgeInputPublisher` 发布到 `/bridge/inspection_result` + `/bridge/placement_zone`，由 `integration_bridge` 冻结（每区 3 次一致）后输出 `/inspection/all`（abnormal/normal）与 `/inspection/all_detailed`（保留 low/high，供语音区分偏低/偏高）。
 
+**仪表盘结果记忆（新增 2026-08-15）**：`nodes/voice_broadcast_node.py` 在扬声器播出 A/B/C/D 区域状态的**同一时刻**，把该区仪表盘结果写入 `nodes/gauge_memory.py` 的记忆模块（黄针 low / 红针 high 统一记为**异常**，绿针 normal 记为**正常**；同时保留原始三态 raw）。记忆自动 JSON 持久化到 `output/gauge_memory.json`（原子写、重启不丢），并发布 `/inspection/gauge_memory`（JSON 全量，供现场 `ros2 topic echo` 与下游消费）；新一轮比赛前发 `/inspection/gauge_memory_reset`（Bool=true）清空。后续夹取-放置阶段据此把红条放到「巡检为异常」的箱子：`abnormal_zones` 与 FSM 的 `/inspection/target_zones` 语义一致（A→D 排序）。
+
 > 5 类版本（`live_detect_yolo_opencv.py` + `best.pt`）单独测试效果差，**已淘汰**，保留仅供历史参考。
 
 **2. 语音播报（决定巡检那 40 分能不能拿满）**

@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -39,7 +40,13 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
+
+# 仪表盘结果记忆存储（兼容 python3 nodes/voice_broadcast_node.py 与 -m 两种运行方式）
+try:
+    from nodes.gauge_memory import GaugeMemory
+except ImportError:  # pragma: no cover
+    from gauge_memory import GaugeMemory
 
 ZONES = ["A", "B", "C", "D"]
 
@@ -135,6 +142,7 @@ class VoiceBroadcastNode(Node):
         self.declare_parameter("detailed_topic", "/inspection/all_detailed")
         self.declare_parameter("state_topic", "/competition/state")
         self.declare_parameter("playback_log_path", "output/voice_broadcast/playback.tsv")
+        self.declare_parameter("memory_path", "output/gauge_memory.json")
 
         self.enabled = bool(self.get_parameter("enabled").value)
         audio_dir = str(self.get_parameter("audio_dir").value)
@@ -146,12 +154,20 @@ class VoiceBroadcastNode(Node):
         detailed_topic = str(self.get_parameter("detailed_topic").value)
         state_topic = str(self.get_parameter("state_topic").value)
         log_path = os.path.expandvars(str(self.get_parameter("playback_log_path").value))
+        memory_path = os.path.expandvars(str(self.get_parameter("memory_path").value))
 
         self.speaker = MiniSpeaker(audio_dir, self.engine, self.device, log_path)
         self._last_text: Optional[str] = None
         self._armed = True
         # 本轮是否已用过 detailed；用于 /inspection/all 兜底去重
         self._got_detailed_this_round = False
+
+        # ── 仪表盘结果记忆存储（播报确定时写入，供抓取/放置阶段查询）──
+        self.memory = GaugeMemory(memory_path)
+        # 记忆全量（JSON），供现场 echo / 下游消费
+        self.pub_gauge_memory = self.create_publisher(String, "/inspection/gauge_memory", 10)
+        # 新一轮比赛前重置记忆
+        self.create_subscription(Bool, "/inspection/gauge_memory_reset", self._on_memory_reset, 10)
 
         # detailed 为主触发源；result_topic(/inspection/all) 仅在 detailed 缺失时兜底
         if detailed_topic:
@@ -205,6 +221,15 @@ class VoiceBroadcastNode(Node):
 
     def _schedule(self, text: str, source: str) -> None:
         states = self._parse(text)
+        # ★ 存储：扬声器播出 A/B/C/D 区域正常/异常的同一时刻，写入仪表盘结果记忆
+        #   （黄/红=异常，绿=正常；只覆盖本轮到播报的区域，其余保持原值）
+        if states:
+            self.memory.store_all(states)
+            self.get_logger().info(
+                f"gauge memory stored: {self.memory.normalized_text()} "
+                f"abnormal={self.memory.abnormal_zones()}"
+            )
+            self._publish_gauge_memory()
         # 固定顺序 A→B→C→D，12 选 4
         plan = []
         for z in ZONES:
@@ -215,6 +240,21 @@ class VoiceBroadcastNode(Node):
             plan.append(key)
         self.get_logger().info(f"broadcast plan (source={source}): {plan}")
         threading.Thread(target=self._play_plan, args=(plan,), daemon=True).start()
+
+    def _on_memory_reset(self, msg: Bool) -> None:
+        # 新一轮比赛开始前清空记忆（发 /inspection/gauge_memory_reset Bool=true）
+        if not msg.data:
+            return
+        self.memory.reset()
+        self.get_logger().info("gauge memory reset")
+        self._publish_gauge_memory()
+
+    def _publish_gauge_memory(self) -> None:
+        try:
+            payload = json.dumps(self.memory.to_dict(), ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            payload = self.memory.normalized_text()
+        self.pub_gauge_memory.publish(String(data=payload))
 
     def _play_plan(self, plan: list[str]) -> None:
         for key in plan:

@@ -306,6 +306,7 @@ def _setup(context, *args, **kwargs):
             "detailed_topic": vb.get("detailed_topic", "/inspection/all_detailed"),
             "state_topic": vb.get("state_topic", "/competition/state"),
             "playback_log_path": _expand(vb.get("playback_log_path", "output/voice_broadcast/playback.tsv"), root),
+            "memory_path": _expand(vb.get("memory_path", "output/gauge_memory.json"), root),
         }
         # rclpy rejects empty -p device:= args; default to "default" so aplay uses the system card.
         voice_params["device"] = vb.get("device", "") or "default"
