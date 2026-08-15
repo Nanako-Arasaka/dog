@@ -220,7 +220,10 @@ if [[ "$START_REALSENSE" == "true" ]]; then
     echo "[OK] RealSense 已在发布图像, 跳过启动"
   else
     nohup ros2 launch realsense2_camera rs_launch.py \
-      enable_color:=true enable_depth:=true align_depth.enable:=true \
+      enable_color:=true enable_depth:=true \
+      enable_infra1:=false enable_infra2:=false \
+      align_depth.enable:=true pointcloud.enable:=false \
+      rgb_camera.color_profile:=640x480x15 depth_module.depth_profile:=640x480x15 \
       > /tmp/slam_logs/realsense.log 2>&1 &
     echo $! > /tmp/slam_logs/realsense.pid
     disown

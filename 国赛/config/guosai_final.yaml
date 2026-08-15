@@ -23,11 +23,19 @@ realsense:
   color_topic: /camera/camera/color/image_raw
   depth_topic: /camera/camera/aligned_depth_to_color/image_raw
   color_info_topic: /camera/camera/color/camera_info
+  # 必须显式指定 color/depth profiles —— 否则 color 话题静默消失,
+  # ORB-SLAM3 等不到 color+depth 同步 → /camera_pose 不发布 → SLAM 无信息
+  # (2026-08-15 现场验证, 见 deploy.md)
   command: >-
     ros2 launch realsense2_camera rs_launch.py
     enable_color:=true
     enable_depth:=true
+    enable_infra1:=false
+    enable_infra2:=false
     align_depth.enable:=true
+    pointcloud.enable:=false
+    rgb_camera.color_profile:=640x480x15
+    depth_module.depth_profile:=640x480x15
 
 orbslam3:
   # 地图通过 settings yaml 的 System.LoadAtlasFromFile 加载（如 guosai_rgbd_map_v4），
