@@ -137,9 +137,13 @@ class VisionNode(Node):
         if req in ('red', 'green'):
             self.pending_request = req
             self.get_logger().info(f'[视觉节点] 收到检测请求: {req}')
-        elif req in ('zone', 'place_zone', 'place'):
+        elif req in ('zone', 'place_zone'):
+            # 注：故意不接受裸 'place'，避免与机械臂 place 命令（'/arm/command'）
+            # 字符串字面冲突；后者目前不会发到这里，但留个语义干净。
             self.pending_zone_request = True
             self.get_logger().info('[视觉节点] 收到放置区字母识别请求')
+        else:
+            self.get_logger().warn(f'[视觉节点] 忽略未知检测请求: {req!r}')
 
     def _cb_inspection(self, msg):
         """从巡检结果推断目标颜色(异常=red)"""

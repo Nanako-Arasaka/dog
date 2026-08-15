@@ -129,6 +129,8 @@ arm:
   arm_command_topic: /arm/command
   # 放置区字母识别模型（7 类 YOLO，与巡检同款；vision_node 用）
   zone_model_path: ${GUOSAI_ROOT}/best_7class.pt
+  # 放置区字母识别结果 topic（必须与 vision_node 的 zone_topic 完全一致，否则 FSM 收不到结果）
+  zone_topic: /placement/recognized_zone
   feedback_topic: /arm/feedback
   max_retries: 3
   feedback_timeout_sec: 20.0

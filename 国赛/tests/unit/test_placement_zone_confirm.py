@@ -95,6 +95,7 @@ class _FakeTM(TaskManagerNode):
         self._place_zone_pending = False
         self._place_zone_retries = 0
         self._place_zone_started_at = 0.0
+        self._place_zone_target = ""   # 快照的目标字母
         self._clock = 1000.0
         self.place_visual_confirm = True
         self._logger = types.SimpleNamespace(
@@ -113,8 +114,11 @@ class _FakeTM(TaskManagerNode):
     def _now(self):
         return self._clock
 
-    def _start_place(self):
-        self.calls.append(("place", self.abnormal_zones[self.target_index]))
+    def _start_place(self, zone=None):
+        # 真实实现用快照值；测试替身也用 _place_zone_target 校验一致性
+        if zone is None:
+            zone = self.abnormal_zones[self.target_index]
+        self.calls.append(("place", zone))
 
 
 def _fresh():
@@ -204,3 +208,95 @@ def test_dry_run_places_directly():
     tm.dry_run = True  # 默认
     tm._on_place_arrival()
     assert ("place", "A") in tm.calls
+
+
+def test_arrival_snapshots_target_zone():
+    """_on_place_arrival 必须把当前目标字母快照到 _place_zone_target。"""
+    tm = _fresh()
+    tm.dry_run = False
+    tm._on_place_arrival()
+    assert tm._place_zone_target == "A"
+    # 即便 abnormal_zones 后续被覆盖，快照不变
+    tm.abnormal_zones = ["B", "D"]
+    assert tm._place_zone_target == "A"
+
+
+def test_gauge_memory_ignored_during_pending():
+    """pending 期间 gauge_memory 不应覆盖 abnormal_zones（否则目标会偏移）。"""
+    tm = _fresh()
+    tm.dry_run = False
+    tm._on_place_arrival()
+    # 进入 pending 后，gauge_memory 推送新的 zones
+    tm._on_gauge_memory(_FakeString(json.dumps({"abnormal_zones": ["B", "D"]})))
+    assert tm.abnormal_zones == ["A", "C"]   # 不变
+    assert tm._place_zone_target == "A"
+
+
+def test_inspection_all_ignored_during_pending():
+    """pending 期间 /inspection/all 也不应覆盖 abnormal_zones。"""
+    tm = _fresh()
+    tm.dry_run = False
+    tm._on_place_arrival()
+    tm._on_inspection_all(_FakeString("B:abnormal,D:abnormal"))
+    assert tm.abnormal_zones == ["A", "C"]   # 不变
+
+
+def test_target_zones_ignored_during_pending():
+    tm = _fresh()
+    tm.dry_run = False
+    tm._on_place_arrival()
+    tm._on_target_zones(_FakeString("B,D"))
+    assert tm.abnormal_zones == ["A", "C"]   # 不变
+
+
+def test_match_uses_snapshotted_target_after_zone_mutation():
+    """目标在 match 路径下不应受 abnormal_zones 后续变更影响。"""
+    tm = _fresh()
+    tm.dry_run = False
+    tm._on_place_arrival()                   # 快照 A
+    tm.abnormal_zones = ["B", "D"]           # 模拟 race
+    tm._on_placement_zone(_FakeString("A"))  # 视觉识别到 A
+    assert ("place", "A") in tm.calls        # 用的是快照，不是 abnormal_zones[0]="B"
+    assert tm._place_zone_pending is False
+
+
+def test_gauge_memory_rejects_non_list():
+    tm = _fresh()
+    tm._on_gauge_memory(_FakeString(json.dumps({"abnormal_zones": "ABCD"})))
+    assert tm.abnormal_zones == ["A", "C"]   # 不变
+
+
+def test_gauge_memory_rejects_non_dict():
+    tm = _fresh()
+    tm._on_gauge_memory(_FakeString(json.dumps(["B", "D"])))  # 顶层是 list
+    assert tm.abnormal_zones == ["A", "C"]   # 不变
+
+
+def test_place_uses_snapshot_when_disabled():
+    """place_visual_confirm=false 时也应该用快照的目标（一致性）。"""
+    tm = _fresh()
+    tm.place_visual_confirm = False
+    tm._on_place_arrival()
+    assert ("place", "A") in tm.calls
+
+
+def test_retry_uses_snapshotted_target_after_zone_mutation():
+    """不匹配重试/超时兜底时，_start_place 也必须用快照而不是 abnormal_zones[target]。"""
+    tm = _fresh()
+    tm.dry_run = False
+    tm._on_place_arrival()                   # 快照 A
+    tm.abnormal_zones = ["B", "D"]           # race
+    for _ in range(PLACEMENT_ZONE_RETRIES + 1):
+        tm._on_placement_zone(_FakeString("B"))   # 不匹配
+    assert ("place", "A") in tm.calls        # 用快照 A，不是 abnormal_zones[0]="B"
+
+
+def test_timeout_uses_snapshotted_target_after_zone_mutation():
+    tm = _fresh()
+    tm.dry_run = False
+    tm._on_place_arrival()                   # 快照 A
+    tm.abnormal_zones = ["B", "D"]           # race
+    tm._place_zone_started_at = 2000.0
+    tm._clock = 2000.0 + PLACEMENT_ZONE_TIMEOUT_SEC + 1
+    tm._check_place_zone_timeout()
+    assert ("place", "A") in tm.calls        # 用快照 A
