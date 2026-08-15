@@ -106,13 +106,14 @@ cone_avoidance:
 inspection:
   # 正式链路用 7 类模型(live_detect.py + best_7class.pt)。
   # 5 类版本(live_detect_yolo_opencv.py + best.pt)已淘汰——单独测试效果差。
-  # camera-id/path: 巡检 USB 相机(2bc5:0511), 现场枚举为 /dev/video0 (2026-08-15 实测;
-  # video1 是 metadata 节点不能出图, 曾误配 video4/video1 均失败; video0 实测 640x480 出图正常)
+  # camera-id/path: 巡检识别用 RealSense(/dev/video4, 2026-08-15 实测 5/5 帧稳定出图 640x480)。
+  # video0/1 是 Astra RGB(2bc5:0511, 抓取视觉用)—— 巡检必须避开, 否则与 astra_camera_node 抢设备。
+  # live_detect.py 内置递增回退: 若 video4 打不开/读不出帧会自动试后续节点, 不崩溃。
   live_detect_command: >-
     python3 live_detect.py
     --model ${GUOSAI_ROOT}/best_7class.pt
-    --camera-id 0
-    --camera-path /dev/video0
+    --camera-id 4
+    --camera-path /dev/video4
     --no-gui
     --no-stream
   bridge_log_path: output/integration_bridge/final_events.jsonl
@@ -136,9 +137,19 @@ arm:
   feedback_topic: /arm/feedback
   max_retries: 3
   feedback_timeout_sec: 20.0
-  # --- 抓取视觉相机: 全部走 RealSense(2026-08-15 用户要求, 彻底不用 Astra)---
-  # astra_camera_node 已从 launch 移除; vision_node 直接订阅 RealSense 话题。
-  # 原 astra(camera_index=0)会打开 /dev/video0 抢占巡检相机, 且 OpenNI2 现场枚举失败。
+  # --- 抓取视觉相机: Astra(2026-08-15 确认, 抓取用 Astra, 巡检用 RealSense)---
+  # astra_camera_node 打开 /dev/video0(Astra RGB 2bc5:0511)+ OpenNI2 深度 → /rgbd_cam/*
+  # 巡检 live_detect 走 /dev/video4(RealSense), 两者不冲突。
+  camera_index: 0                 # Astra RGB 设备号(/dev/video0)
+  depth_mode: auto                # auto | pyorbbec | openni | uvc | realsense | none(真实深度后端)
+  depth_index: -1                 # UVC 深度设备号, -1=默认 camera_index+1
+  fake_depth_fallback: false      # 深度不可用时禁止回退伪深度(正式比赛必须 false)
+  openni_redist: ""               # OpenNI2 Redist 路径(空=自动探测 ~/openni2/OpenNI-Linux-*/Redist)
+  openni_fx: 945.028
+  openni_fy: 945.028
+  openni_cx: 320.0
+  openni_cy: 400.0
+  # realsense 兜底转发(仅 depth_mode=realsense 时用, 当前 auto 不会走)
   realsense_color_topic: /camera/camera/color/image_raw
   realsense_depth_topic: /camera/camera/aligned_depth_to_color/image_raw
   realsense_info_topic: /camera/camera/color/camera_info

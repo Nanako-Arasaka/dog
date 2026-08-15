@@ -235,9 +235,27 @@ def _setup(context, *args, **kwargs):
 
     if not dry_run and start_arm:
         actions += [
-            # 2026-08-15: 彻底移除 astra_camera_node —— 用户要求抓取视觉全部走 RealSense。
-            # 原 astra 节点(camera_index=0)会打开 /dev/video0 抢占巡检相机, 且 OpenNI2 现场
-            # 枚举失败(get_device_count 属性错误)。现在 vision_node 直接订阅 RealSense 话题。
+            # 2026-08-15: 抓取视觉用 Astra(video0 RGB + OpenNI2 深度 → /rgbd_cam/*),
+            # 巡检识别用 RealSense(/dev/video4), 两者互不冲突。
+            _py_node(
+                root,
+                "arm_grasp/astra_camera_node.py",
+                {
+                    "camera_index": int(arm.get("camera_index", 0)),
+                    "depth_mode": arm.get("depth_mode", "auto"),
+                    "depth_index": int(arm.get("depth_index", -1)),
+                    "fake_depth_fallback": _bool_text(arm.get("fake_depth_fallback", False)),
+                    "openni_redist": arm.get("openni_redist", ""),
+                    "openni_fx": float(arm.get("openni_fx", 945.028)),
+                    "openni_fy": float(arm.get("openni_fy", 945.028)),
+                    "openni_cx": float(arm.get("openni_cx", 320.0)),
+                    "openni_cy": float(arm.get("openni_cy", 400.0)),
+                    "realsense_color_topic": arm.get("realsense_color_topic", "/camera/camera/color/image_raw"),
+                    "realsense_depth_topic": arm.get("realsense_depth_topic", "/camera/camera/aligned_depth_to_color/image_raw"),
+                    "realsense_info_topic": arm.get("realsense_info_topic", "/camera/camera/color/camera_info"),
+                },
+                "astra_camera_node",
+            ),
             _py_node(
                 root,
                 "arm_grasp/arm_grasp/vision_node.py",
@@ -245,10 +263,7 @@ def _setup(context, *args, **kwargs):
                     "config_path": _expand(arm.get("grasp_config", ""), root),
                     "zone_model_path": _expand(arm.get("zone_model_path", "best_7class.pt"), root),
                     "zone_topic": arm.get("zone_topic", "/placement/recognized_zone"),
-                    # 直连 RealSense 话题(深度默认 16UC1 mm, 与 vision_node 解码一致)
-                    "color_topic": arm.get("realsense_color_topic", "/camera/camera/color/image_raw"),
-                    "depth_topic": arm.get("realsense_depth_topic", "/camera/camera/aligned_depth_to_color/image_raw"),
-                    "info_topic": arm.get("realsense_info_topic", "/camera/camera/color/camera_info"),
+                    # 默认订阅 /rgbd_cam/* (由 astra_camera_node 发布)
                 },
                 "arm_vision_node",
             ),
