@@ -20,7 +20,9 @@ LISTEN_PORT="5005"
 GOAL_TIMEOUT=60.0
 
 # 环境
+set +u
 source /opt/ros/humble/setup.bash
+set -u
 for setup_file in \
   "$ROOT_DIR/install/setup.bash" \
   "$ROOT_DIR/arm_grasp/install/setup.bash" \
