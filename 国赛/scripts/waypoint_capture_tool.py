@@ -90,12 +90,13 @@ def save_waypoints(path: Path, waypoints: dict[str, dict[str, float]], order: li
     ordered_names += sorted(name for name in waypoints if name not in set(ordered_names))
     data: dict[str, Any] = {"waypoints": []}
     for name in ordered_names:
-        pose = waypoints.get(name, {"x": 0.0, "y": 0.0, "yaw": 0.0})
+        pose = waypoints.get(name, {"x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0})
         data["waypoints"].append(
             {
                 "name": name,
                 "x": round(float(pose["x"]), 6),
                 "y": round(float(pose["y"]), 6),
+                "z": round(float(pose.get("z", 0.0)), 6),
                 "yaw": round(float(pose["yaw"]), 6),
             }
         )
@@ -125,7 +126,8 @@ class PoseSampler(Node):
         self._append_pose(msg.pose.pose)
 
     def _append_pose(self, pose: Pose) -> None:
-        self.samples.append((float(pose.position.x), float(pose.position.y), yaw_from_pose(pose)))
+        self.samples.append((float(pose.position.x), float(pose.position.y),
+                             float(pose.position.z), yaw_from_pose(pose)))
         if len(self.samples) > max(2, self.stable_samples * 3):
             self.samples = self.samples[-self.stable_samples * 3 :]
 
@@ -145,20 +147,23 @@ class PoseSampler(Node):
                 raise TimeoutError("pose did not become stable before timeout")
         raise RuntimeError("rclpy stopped before a pose was captured")
 
-    def _stable_pose(self, max_position_step: float, max_yaw_step: float) -> tuple[float, float, float] | None:
+    def _stable_pose(self, max_position_step: float, max_yaw_step: float) -> tuple[float, float, float, float] | None:
         if len(self.samples) < self.stable_samples:
             return None
         window = self.samples[-self.stable_samples :]
         for prev, current in zip(window, window[1:]):
-            step = math.hypot(current[0] - prev[0], current[1] - prev[1])
-            yaw_step = abs(normalize_angle(current[2] - prev[2]))
+            step = math.sqrt((current[0]-prev[0])**2 +
+                             (current[1]-prev[1])**2 +
+                             (current[2]-prev[2])**2)
+            yaw_step = abs(normalize_angle(current[3] - prev[3]))
             if step > max_position_step or yaw_step > max_yaw_step:
                 return None
         x = sum(item[0] for item in window) / len(window)
         y = sum(item[1] for item in window) / len(window)
-        sin_yaw = sum(math.sin(item[2]) for item in window) / len(window)
-        cos_yaw = sum(math.cos(item[2]) for item in window) / len(window)
-        return x, y, math.atan2(sin_yaw, cos_yaw)
+        z = sum(item[2] for item in window) / len(window)
+        sin_yaw = sum(math.sin(item[3]) for item in window) / len(window)
+        cos_yaw = sum(math.cos(item[3]) for item in window) / len(window)
+        return x, y, z, math.atan2(sin_yaw, cos_yaw)
 
 
 def parse_args() -> argparse.Namespace:
@@ -176,12 +181,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def capture_one(args: argparse.Namespace, sampler: PoseSampler, name: str) -> dict[str, float]:
-    x, y, yaw = sampler.wait_stable(
+    x, y, z, yaw = sampler.wait_stable(
         max_position_step=args.stable_max_position_step,
         max_yaw_step=args.stable_max_yaw_step,
         timeout_sec=args.timeout_sec,
     )
-    return {"x": x, "y": y, "yaw": yaw}
+    return {"x": x, "y": y, "z": z, "yaw": yaw}
 
 
 def main() -> int:

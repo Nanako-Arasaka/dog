@@ -12,6 +12,9 @@ class ObstacleZoneRect:
     xmax: float
     ymin: float
     ymax: float
+    # 可选 z 范围(ORB 世界系 z 可能是前进方向)。缺省 = 不限制 z。
+    zmin: float = float("-inf")
+    zmax: float = float("inf")
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ObstacleZoneRect":
@@ -20,13 +23,19 @@ class ObstacleZoneRect:
             xmax=float(data["xmax"]),
             ymin=float(data["ymin"]),
             ymax=float(data["ymax"]),
+            zmin=float(data.get("zmin", float("-inf"))),
+            zmax=float(data.get("zmax", float("inf"))),
         )
 
-    def contains(self, x: float, y: float, margin: float = 0.0) -> bool:
-        return (
+    def contains(self, x: float, y: float, z: float | None = None, margin: float = 0.0) -> bool:
+        if not (
             self.xmin + margin <= x <= self.xmax - margin
             and self.ymin + margin <= y <= self.ymax - margin
-        )
+        ):
+            return False
+        if z is not None:
+            return self.zmin <= z <= self.zmax
+        return True
 
 
 def load_map_config(path: str | Path) -> tuple[list[tuple[float, float]], ObstacleZoneRect]:

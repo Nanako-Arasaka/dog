@@ -21,6 +21,7 @@ from std_msgs.msg import Bool, String
 class Pose2D:
     x: float
     y: float
+    z: float
     yaw: float
 
 
@@ -113,14 +114,15 @@ class WaypointNavigator(Node):
 
     def _parse_waypoint_item(self, item: Any) -> tuple[str, Pose2D]:
         if not isinstance(item, dict):
-            return "", Pose2D(0.0, 0.0, 0.0)
+            return "", Pose2D(0.0, 0.0, 0.0, 0.0)
         name = str(item.get("name", item.get("id", ""))).strip()
         if "pose" in item and isinstance(item["pose"], dict):
             item = {**item, **item["pose"]}
         x = float(item.get("x", item.get("target_x", 0.0)))
         y = float(item.get("y", item.get("target_y", 0.0)))
+        z = float(item.get("z", item.get("target_z", 0.0)))
         yaw = float(item.get("yaw", item.get("theta", item.get("target_yaw", 0.0))))
-        return name, Pose2D(x, y, yaw)
+        return name, Pose2D(x, y, z, yaw)
 
     def _on_pose_stamped(self, msg: PoseStamped) -> None:
         self._update_pose(msg.pose)
@@ -129,7 +131,8 @@ class WaypointNavigator(Node):
         self._update_pose(msg.pose.pose)
 
     def _update_pose(self, pose: Pose) -> None:
-        self.current_pose = Pose2D(float(pose.position.x), float(pose.position.y), yaw_from_pose(pose))
+        self.current_pose = Pose2D(float(pose.position.x), float(pose.position.y),
+                                   float(pose.position.z), yaw_from_pose(pose))
 
     def _on_loc_ok(self, msg: Bool) -> None:
         self.localization_ok = bool(msg.data)
@@ -171,7 +174,8 @@ class WaypointNavigator(Node):
 
         dx = self.current_goal.x - self.current_pose.x
         dy = self.current_goal.y - self.current_pose.y
-        distance = math.hypot(dx, dy)
+        dz = self.current_goal.z - self.current_pose.z
+        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
         yaw_error = normalize_angle(self.current_goal.yaw - self.current_pose.yaw)
 
         if distance <= self.goal_tolerance and abs(yaw_error) <= self.yaw_tolerance:

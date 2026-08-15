@@ -44,6 +44,7 @@ from std_msgs.msg import Bool, String
 class Pose2D:
     x: float
     y: float
+    z: float
     yaw: float
 
 
@@ -92,10 +93,13 @@ class PoseTrack:
 
     def update(self, pose: Pose, msg: PoseStamped, now: float) -> str:
         """Ingest one pose. Returns 'ok' or 'jump'."""
-        current = Pose2D(float(pose.position.x), float(pose.position.y), yaw_from_pose(pose))
+        current = Pose2D(float(pose.position.x), float(pose.position.y),
+                         float(pose.position.z), yaw_from_pose(pose))
         event = "ok"
         if self.last_pose is not None:
-            dist = math.hypot(current.x - self.last_pose.x, current.y - self.last_pose.y)
+            dist = math.sqrt((current.x - self.last_pose.x) ** 2 +
+                             (current.y - self.last_pose.y) ** 2 +
+                             (current.z - self.last_pose.z) ** 2)
             dyaw = abs(angle_diff(current.yaw, self.last_pose.yaw))
             if dist > self.jump_position_threshold or dyaw > self.jump_yaw_threshold:
                 event = "jump"
@@ -119,7 +123,9 @@ class PoseTrack:
         prev = None
         for sample in self.samples:
             if prev is not None:
-                dist = math.hypot(sample.x - prev.x, sample.y - prev.y)
+                dist = math.sqrt((sample.x - prev.x) ** 2 +
+                                 (sample.y - prev.y) ** 2 +
+                                 (sample.z - prev.z) ** 2)
                 dyaw = abs(angle_diff(sample.yaw, prev.yaw))
                 if dist > self.max_position_step or dyaw > self.max_yaw_step:
                     return False
