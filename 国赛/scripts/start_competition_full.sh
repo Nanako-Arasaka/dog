@@ -240,7 +240,7 @@ if [[ "$START_ORBSLAM3" == "true" ]]; then
     nohup ros2 run orbslam3 rgbd \
       "$GUOSAI_ROOT/controller/ORB_SLAM3/Vocabulary/ORBvoc.txt" \
       /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_localization_v4.yaml \
-      --ros-args -p use_viewer:=false \
+      --ros-args -p use_viewer:=false -p color_encoding:=bgr8 \
       -r /camera/color/image_raw:=/camera/camera/color/image_raw \
       -r /camera/aligned_depth_to_color/image_raw:=/camera/camera/aligned_depth_to_color/image_raw \
       > /tmp/slam_logs/orbslam3.log 2>&1 &

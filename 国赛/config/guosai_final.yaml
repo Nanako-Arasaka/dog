@@ -46,6 +46,7 @@ orbslam3:
     ${GUOSAI_ROOT}/controller/ORB_SLAM3/Vocabulary/ORBvoc.txt
     /home/jetson/Desktop/guosai/slam_maps/guosai_realsense_rgbd_localization_v4.yaml
     --ros-args
+    -p color_encoding:=bgr8
     -r /camera/color/image_raw:=/camera/camera/color/image_raw
     -r /camera/aligned_depth_to_color/image_raw:=/camera/camera/aligned_depth_to_color/image_raw
 
@@ -114,14 +115,14 @@ cone_avoidance:
 inspection:
   # 正式链路用 7 类模型(live_detect.py + best_7class.pt)。
   # 5 类版本(live_detect_yolo_opencv.py + best.pt)已淘汰——单独测试效果差。
-  # 相机源: video0(USB Camera 2bc5:0511)。若被 astra_camera_node 占用,
-  # live_detect 自动 kill 占用者释放(抓取可暂停, 巡检必须活着)。
-  # realsense2_camera/orbslam3 是保护进程, 绝不 kill。
+  # 相机源: 巡检相机 = RealSense(video2-7), 与 SLAM 共用同一相机。
+  # video2-7 被 realsense2_camera 占用(保护进程, 不能 kill) → 巡检必须订阅
+  # ROS 话题 /camera/camera/color/image_raw 共用图像, 零冲突。
+  # video0(USB Camera)= Astra 抓取用, 与巡检无关。
   live_detect_command: >-
     python3 live_detect.py
     --model ${GUOSAI_ROOT}/best_7class.pt
-    --camera-id 0
-    --camera-path /dev/video0
+    --color-topic /camera/camera/color/image_raw
     --no-gui
     --no-stream
   bridge_log_path: output/integration_bridge/final_events.jsonl
