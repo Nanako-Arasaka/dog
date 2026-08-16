@@ -392,3 +392,52 @@ SLAM 主源 + AprilTag 绝对定位兜底，watchdog 仲裁后输出融合位姿
 - watchdog 6 个仲裁场景单测通过（稳定/兜底接管/恢复回切/双丢故障/短间隙存活/跳变抑制）
 - `calibrate_tags.py --self-test` 通过（欧拉角往返、标定-运行时方程互逆、旋转平均抗噪）
 - 待现场执行：实机标定 10 个 tag → `--verify` 平均误差 ≤10cm/5° → 开 `enabled`
+
+## 2026-08-16 修改记录：狗乱走根因修复（坐标系 + watchdog 崩溃）
+
+### 根因 1：ORB 光学系从未转换成导航平面（主因）
+
+ORB-SLAM3 RGBD（无 IMU）世界系 = 建图首帧相机光学系：**z 前、x 右、y 下**。
+地面平面是 **x-z**，y 是垂直轴。证据：航点采集数据 y≡0、z 单调 0→5.6m。
+而 navigator/cone 节点全部按 REP-103（地面=x-y、yaw=绕 z）写：
+- `atan2(dy, dx)` 里 dy≡0 → 目标方向恒为 0°/180°，与真实方向无关
+- `yaw_from_pose` 提取绕 z 旋转 = 相机 roll，不是狗的朝向（180° 转向检测不到）
+
+### 根因 2：watchdog `pose.pose.position` 笔误（必崩）
+
+`last_msg` 是 PoseStamped，正确写法 `.pose.position`。旧代码 `.pose.pose.position`
+在狗离原点 0.5m（`last_good_pose` 置位）且位姿稳定后 100% 抛 AttributeError →
+watchdog 进程挂掉 → `/localization/ok` 冻在 True、融合位姿停更 → navigator 拿
+冻结位姿继续发指令 → **狗乱走的直接机制**。
+
+### 修改文件（5 个 + 2 配置 + 1 航点）
+
+| 文件 | 修改 |
+|------|------|
+| `nodes/waypoint_navigator.py` | `_update_pose` 转导航平面 `nav_x=z, nav_y=-x`；`heading_from_pose(pose, yaw_axis)`，默认绕 y；waypoints 文件 x/y 直接是导航平面坐标 |
+| `nodes/localization_watchdog.py` | 修 `.pose.pose.position`→`.pose.position`（2 处）；失跟判据/基线门限改平面距离 `hypot(x,z)`；内部 yaw 检测同用 heading 公式（新增 yaw_axis 参数） |
+| `nodes/cone_avoidance_node.py` | `_on_pose` 同款平面映射 + yaw_axis 参数 |
+| `scripts/waypoint_capture_tool.py` | 采集时同款转换（写导航平面坐标），新增 `--yaw-axis`（默认 y，必须与运行时一致） |
+| `launch/guosai_final.launch.py` | watchdog/navigator/cone 三节点贯通 `yaw_axis` 参数 |
+| `config/guosai_final.yaml` | `navigation.yaw_axis: y` + `cone_avoidance.yaw_axis: y` |
+| `cone_avoidance/competition_map.yaml` | global_path/zone 换算到导航平面（旧值是错误坐标系的锚点） |
+| `jetson_payload/slam_maps/waypoints_FINAL.yaml` | 位置已换算到导航平面（有效）；**yaw 仍是旧公式无效值，必须重采** |
+
+### ⚠️ 上机前必做（Jetson 现场）
+
+1. **验证 yaw 轴**（30 秒）：狗原地左转 90°，`ros2 topic echo /camera_pose` 取
+   orientation 四元数代入 heading 公式（绕 y），结果应 ≈ +1.57。不符则全局把
+   `yaw_axis` 改 `z`（config 两处 + 采集工具 `--yaw-axis z`）。
+2. **重采航点 yaw**：旧 waypoints 文件里的 yaw 是绕 z 轴提取的无效值。用更新后的
+   `waypoint_capture_tool.py` 重采（位置也会顺带刷新，狗需重新走到每个点）：
+   `bash scripts/guosai_onekey.sh collect`
+3. 航点重采后 `competition_map.yaml` 的 global_path 锚点若变化需同步更新。
+4. tag_localizer 未开（enabled: false）；将来开启时其四元数构造约定需与
+   yaw_axis 轴选择核对（当前按光学系公式，与 y 轴模式一致）。
+
+### 验证状态
+
+- 5 个 python 文件 py_compile 通过
+- `test_local_planner.py` + `test_cone_strategy.py` 12 passed（RobotPose 映射在
+  ROS 接入层，不影响 planner 单测）
+- 待现场：yaw 轴实测 → 航点重采 → 短距试跑 start_exit→obstacle_entry

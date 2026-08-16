@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Navigate named waypoints from YAML and publish Twist to motion_mux."""
+"""Navigate named waypoints from YAML and publish Twist to motion_mux.
+
+坐标系约定(2026-08-16):
+- /camera_pose_fused 是 ORB-SLAM3 原始光学系(z 前、x 右、y 下), 本节点在
+  _update_pose 里转成导航平面: nav_x = z(前进), nav_y = -x(左)。
+- waypoints_yaml 里的 x/y 直接就是导航平面坐标(前进/左), 由
+  waypoint_capture_tool.py 采集时同样转换写入。
+- 朝向提取轴由 yaw_axis 参数决定, 必须与采集工具的 --yaw-axis 一致。
+"""
 
 from __future__ import annotations
 
@@ -37,8 +45,22 @@ def normalize_angle(angle: float) -> float:
     return angle
 
 
-def yaw_from_pose(pose: Pose) -> float:
+def heading_from_pose(pose: Pose, yaw_axis: str) -> float:
+    """从四元数提取平面朝向(逆时针为正)。
+
+    ORB-SLAM3 RGBD(无 IMU) 世界系 = 建图首帧相机光学系: z 前、x 右、y 下。
+    地面平面 = x-z, 狗的朝向 = 绕 y(垂直轴)的旋转:
+      yaw_axis="y"(默认): heading = -rot_y, 转成逆时针为正
+      yaw_axis="z":       沿用旧公式(绕 z 旋转), 仅当位姿发布端已转成 ROS 系时用
+    现场验证: 狗原地左转 90°, /camera_pose 的 orientation 换算后 heading 应 +1.57
+    """
     q = pose.orientation
+    if yaw_axis == "y":
+        rot_y = math.atan2(
+            2.0 * (q.w * q.y + q.x * q.z),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        return -rot_y
     siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
     cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     return math.atan2(siny_cosp, cosy_cosp)
@@ -61,9 +83,12 @@ class WaypointNavigator(Node):
         self.declare_parameter("max_vx", 0.28)
         self.declare_parameter("max_wz", 0.45)
         self.declare_parameter("rotate_in_place_angle", 0.75)
+        # 朝向提取轴: "y"=ORB 光学系垂直轴(默认), "z"=位姿已转 ROS 系时用
+        self.declare_parameter("yaw_axis", "y")
 
         self.pose_topic = str(self.get_parameter("pose_topic").value)
         self.pose_type = str(self.get_parameter("pose_type").value).lower()
+        self.yaw_axis = str(self.get_parameter("yaw_axis").value).lower()
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
         self.yaw_tolerance = float(self.get_parameter("yaw_tolerance").value)
         self.kp_linear = float(self.get_parameter("kp_linear").value)
@@ -131,8 +156,13 @@ class WaypointNavigator(Node):
         self._update_pose(msg.pose.pose)
 
     def _update_pose(self, pose: Pose) -> None:
-        self.current_pose = Pose2D(float(pose.position.x), float(pose.position.y),
-                                   float(pose.position.z), yaw_from_pose(pose))
+        # ORB 光学系 → 导航平面: 前进 = z, 左 = -x (y 是垂直轴, 存到 z 字段仅作高度参考)
+        self.current_pose = Pose2D(
+            float(pose.position.z),
+            -float(pose.position.x),
+            float(pose.position.y),
+            heading_from_pose(pose, self.yaw_axis),
+        )
 
     def _on_loc_ok(self, msg: Bool) -> None:
         self.localization_ok = bool(msg.data)
@@ -174,8 +204,8 @@ class WaypointNavigator(Node):
 
         dx = self.current_goal.x - self.current_pose.x
         dy = self.current_goal.y - self.current_pose.y
-        dz = self.current_goal.z - self.current_pose.z
-        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+        # 平面距离: x/y 已是导航平面, z 只是高度参考(垂直噪声不参与导航判断)
+        distance = math.hypot(dx, dy)
         yaw_error = normalize_angle(self.current_goal.yaw - self.current_pose.yaw)
 
         if distance <= self.goal_tolerance and abs(yaw_error) <= self.yaw_tolerance:

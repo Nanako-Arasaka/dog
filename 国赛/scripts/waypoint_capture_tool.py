@@ -36,8 +36,16 @@ DEFAULT_WAYPOINTS = [
 ]
 
 
-def yaw_from_pose(pose: Pose) -> float:
+def heading_from_pose(pose: Pose, yaw_axis: str) -> float:
+    """平面朝向(逆时针为正)。yaw_axis 与 waypoint_navigator 的同名参数必须一致:
+    "y" = ORB 光学系垂直轴(默认), "z" = 位姿已转 ROS 系时用。"""
     q = pose.orientation
+    if yaw_axis == "y":
+        rot_y = math.atan2(
+            2.0 * (q.w * q.y + q.x * q.z),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        return -rot_y
     siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
     cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     return math.atan2(siny_cosp, cosy_cosp)
@@ -107,10 +115,12 @@ def save_waypoints(path: Path, waypoints: dict[str, dict[str, float]], order: li
 
 
 class PoseSampler(Node):
-    def __init__(self, pose_topic: str, pose_type: str, stable_samples: int) -> None:
+    def __init__(self, pose_topic: str, pose_type: str, stable_samples: int,
+                 yaw_axis: str = "y") -> None:
         super().__init__("waypoint_capture_tool")
         self.samples: list[tuple[float, float, float]] = []
         self.stable_samples = stable_samples
+        self.yaw_axis = yaw_axis.lower()
         pose_type = pose_type.lower()
         if pose_type in ("pose_stamped", "posestamped", "pose"):
             self.create_subscription(PoseStamped, pose_topic, self._on_pose_stamped, 10)
@@ -126,8 +136,10 @@ class PoseSampler(Node):
         self._append_pose(msg.pose.pose)
 
     def _append_pose(self, pose: Pose) -> None:
-        self.samples.append((float(pose.position.x), float(pose.position.y),
-                             float(pose.position.z), yaw_from_pose(pose)))
+        # ORB 光学系 → 导航平面(与 waypoint_navigator._update_pose 一致):
+        # nav_x = z(前进), nav_y = -x(左), 高度 = y 仅作参考
+        self.samples.append((float(pose.position.z), -float(pose.position.x),
+                             float(pose.position.y), heading_from_pose(pose, self.yaw_axis)))
         if len(self.samples) > max(2, self.stable_samples * 3):
             self.samples = self.samples[-self.stable_samples * 3 :]
 
@@ -174,6 +186,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stable-samples", type=int, default=10)
     parser.add_argument("--stable-max-position-step", type=float, default=0.04)
     parser.add_argument("--stable-max-yaw-step", type=float, default=0.18)
+    # 与 waypoint_navigator 的 yaw_axis 参数保持一致, 否则存下的 yaw 与运行时语义不符
+    parser.add_argument("--yaw-axis", default="y", choices=["y", "z"])
     parser.add_argument("--timeout-sec", type=float, default=20.0)
     parser.add_argument("--waypoints", nargs="*", default=DEFAULT_WAYPOINTS)
     parser.add_argument("--single", help="capture one named waypoint and exit")
@@ -199,7 +213,8 @@ def main() -> int:
 
     waypoints = load_waypoints(output)
     rclpy.init()
-    sampler = PoseSampler(args.pose_topic, args.pose_type, max(2, args.stable_samples))
+    sampler = PoseSampler(args.pose_topic, args.pose_type, max(2, args.stable_samples),
+                          yaw_axis=args.yaw_axis)
     try:
         if args.single:
             name = args.single.strip()

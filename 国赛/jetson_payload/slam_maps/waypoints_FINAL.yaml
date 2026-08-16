@@ -1,66 +1,58 @@
+# 2026-08-16 坐标系修正: x/y 已从 ORB 光学系换算到导航平面
+#   nav_x = orb_z (前进), nav_y = -orb_x (左)
+# 转换自 2026-08-15 采集的原始航点, 位置有效; yaw 仍是旧公式(绕 z 轴)提取的
+# 无效值 —— 正式比赛前必须用更新后的 waypoint_capture_tool.py
+# (默认 --yaw-axis y) 重新采集每个航点, 否则到点后狗会朝错误朝向打转。
 waypoints:
 - name: start_exit
-  x: -0.2096
-  y: 0.0
-  z: -0.0093
+  x: -0.0093
+  y: 0.2096
   yaw: 1.5838
 - name: obstacle_entry
-  x: -0.083
-  y: 0.0
-  z: 1.091
+  x: 1.091
+  y: 0.083
   yaw: 1.5838
 - name: obstacle_exit
-  x: 0.297
-  y: 0.0
-  z: 4.3919
+  x: 4.3919
+  y: -0.297
   yaw: -1.5569
 - name: inspection_box_1_side_1
-  x: 0.5744
-  y: 0.0
-  z: 4.8586
+  x: 4.8586
+  y: -0.5744
   yaw: -1.5569
 - name: inspection_box_1_side_2
-  x: 0.583
-  y: 0.0
-  z: 4.2466
+  x: 4.2466
+  y: -0.583
   yaw: 1.5838
 - name: inspection_box_2_side_1
-  x: 1.9829
-  y: 0.0
-  z: 5.6618
+  x: 5.6618
+  y: -1.9829
   yaw: -1.5569
 - name: inspection_box_2_side_2
-  x: 1.9915
-  y: 0.0
-  z: 5.0498
+  x: 5.0498
+  y: -1.9915
   yaw: 1.5838
 - name: pick_area
-  x: 0.7586
-  y: 0.0
-  z: 1.8279
+  x: 1.8279
+  y: -0.7586
   yaw: -1.5569
 - name: place_A
-  x: 2.7305
-  y: 0.0
-  z: 2.9525
+  x: 2.9525
+  y: -2.7305
   yaw: -1.5569
 - name: place_B
-  x: 2.7376
-  y: 0.0
-  z: 2.4425
+  x: 2.4425
+  y: -2.7376
   yaw: -1.5569
 - name: place_C
-  x: 2.7447
-  y: 0.0
-  z: 1.9325
+  x: 1.9325
+  y: -2.7447
   yaw: -1.5569
 - name: place_D
-  x: 2.7518
-  y: 0.0
-  z: 1.4225
+  x: 1.4225
+  y: -2.7518
   yaw: -1.5569
 - name: finish
-  x: 3.1341
-  y: 0.0
-  z: 0.96
+  x: 0.96
+  y: -3.1341
   yaw: -1.5569

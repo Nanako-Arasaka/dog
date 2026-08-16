@@ -71,10 +71,14 @@ def load_control_config(path_text: str) -> ControlConfig:
     return ControlConfig(**filtered)
 
 
-def yaw_from_quaternion(qx: float, qy: float, qz: float, qw: float) -> float:
-    siny_cosp = 2.0 * (qw * qz + qx * qy)
-    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-    return math.atan2(siny_cosp, cosy_cosp)
+def heading_from_quaternion(qx: float, qy: float, qz: float, qw: float,
+                            yaw_axis: str = "y") -> float:
+    """平面朝向(逆时针为正), 与 waypoint_navigator.heading_from_pose 保持一致:
+    "y" = ORB 光学系垂直轴(默认), "z" = 位姿已转 ROS 系时用。"""
+    if yaw_axis == "y":
+        rot_y = math.atan2(2.0 * (qw * qy + qx * qz), 1.0 - 2.0 * (qy * qy + qz * qz))
+        return -rot_y
+    return math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
 
 
 class ConeAvoidanceNode(Node):
@@ -91,6 +95,7 @@ class ConeAvoidanceNode(Node):
         self.declare_parameter("control_yaml", str(ROOT / "cone_avoidance" / "config" / "control.yaml"))
         self.declare_parameter("map_config", str(ROOT / "cone_avoidance" / "competition_map.yaml"))
         self.declare_parameter("pose_topic", "/camera_pose")
+        self.declare_parameter("yaw_axis", "y")  # 与 waypoint_navigator 同名参数一致
         self.declare_parameter("depth_topic", "/camera/camera/aligned_depth_to_color/image_raw")
         self.declare_parameter("depth_info_topic", "/camera/camera/aligned_depth_to_color/camera_info")
 
@@ -142,10 +147,15 @@ class ConeAvoidanceNode(Node):
 
     def _on_pose(self, msg: PoseStamped) -> None:
         p = msg.pose
+        # ORB 光学系 → 导航平面(与 waypoint_navigator 一致):
+        # nav_x = z(前进), nav_y = -x(左), y 为垂直轴忽略
         self.latest_pose = RobotPose(
-            x=float(p.position.x),
-            y=float(p.position.y),
-            yaw=yaw_from_quaternion(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w),
+            x=float(p.position.z),
+            y=-float(p.position.x),
+            yaw=heading_from_quaternion(
+                p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w,
+                str(self.get_parameter("yaw_axis").value).lower(),
+            ),
         )
 
     def _on_depth(self, msg: Image) -> None:

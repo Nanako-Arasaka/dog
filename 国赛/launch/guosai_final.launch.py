@@ -131,6 +131,7 @@ def _setup(context, *args, **kwargs):
                 "switch_suppress_sec": tag.get("switch_suppress_sec", 2.5),
                 "slam_distrust_sec": tag.get("slam_distrust_sec", 2.0),
                 "fault_grace_sec": tag.get("fault_grace_sec", 0.5),
+                "yaw_axis": nav.get("yaw_axis", "y"),
             },
             "localization_watchdog",
         )
@@ -173,6 +174,8 @@ def _setup(context, *args, **kwargs):
                 "max_vx": nav.get("max_vx", 0.28),
                 "max_wz": nav.get("max_wz", 0.45),
                 "rotate_in_place_angle": nav.get("rotate_in_place_angle", 0.75),
+                # 朝向提取轴, 必须与 waypoint_capture_tool --yaw-axis 一致
+                "yaw_axis": nav.get("yaw_axis", "y"),
             },
             "waypoint_navigator",
         )
@@ -215,6 +218,7 @@ def _setup(context, *args, **kwargs):
                     "control_yaml": _expand(cone.get("control_yaml", ""), root),
                     "map_config": _expand(cone.get("map_config", ""), root),
                     "pose_topic": cone.get("pose_topic", "/camera_pose_fused"),
+                    "yaw_axis": cone.get("yaw_axis", "y"),
                     "depth_topic": cone.get("depth_topic", "/camera/camera/aligned_depth_to_color/image_raw"),
                     "depth_info_topic": cone.get("depth_info_topic", "/camera/camera/aligned_depth_to_color/camera_info"),
                 },

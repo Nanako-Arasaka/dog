@@ -48,8 +48,16 @@ class Pose2D:
     yaw: float
 
 
-def yaw_from_pose(pose: Pose) -> float:
+def heading_from_pose(pose: Pose, yaw_axis: str) -> float:
+    """平面朝向(逆时针为正), 与 waypoint_navigator 同款公式。
+    ORB 光学系下狗朝向 = 绕 y(垂直轴)旋转; 绕 z 是相机 roll, 检测不到转向。"""
     q = pose.orientation
+    if yaw_axis == "y":
+        rot_y = math.atan2(
+            2.0 * (q.w * q.y + q.x * q.z),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        return -rot_y
     siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
     cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     return math.atan2(siny_cosp, cosy_cosp)
@@ -77,6 +85,7 @@ class PoseTrack:
         jump_position_threshold: float,
         jump_yaw_threshold: float,
         distrust_sec: float,
+        yaw_axis: str = "y",
     ) -> None:
         self.name = name
         self.timeout_sec = timeout_sec
@@ -85,6 +94,7 @@ class PoseTrack:
         self.jump_position_threshold = jump_position_threshold
         self.jump_yaw_threshold = jump_yaw_threshold
         self.distrust_sec = distrust_sec
+        self.yaw_axis = yaw_axis.lower()
         self.samples: deque[Pose2D] = deque(maxlen=max(2, stable_samples))
         self.last_pose: Optional[Pose2D] = None
         self.last_good_pose: Optional[Pose2D] = None  # 远离 ORB 原点的基线,用于判 SLAM 失跟
@@ -95,7 +105,7 @@ class PoseTrack:
     def update(self, pose: Pose, msg: PoseStamped, now: float) -> str:
         """Ingest one pose. Returns 'ok' or 'jump'."""
         current = Pose2D(float(pose.position.x), float(pose.position.y),
-                         float(pose.position.z), yaw_from_pose(pose))
+                         float(pose.position.z), heading_from_pose(pose, self.yaw_axis))
         event = "ok"
         if self.last_pose is not None:
             dist = math.sqrt((current.x - self.last_pose.x) ** 2 +
@@ -109,7 +119,8 @@ class PoseTrack:
             else:
                 self.samples.append(current)
                 # 远离 ORB 原点 → 记为基线(失跟判据用);启动期 dog 在原点附近不记
-                if math.sqrt(current.x ** 2 + current.y ** 2 + current.z ** 2) > 0.5:
+                # 地面平面 = x-z(y 为垂直轴), 只用平面距离
+                if math.hypot(current.x, current.z) > 0.5:
                     self.last_good_pose = current
         else:
             self.samples.append(current)
@@ -140,15 +151,15 @@ class PoseTrack:
         if not (self.fresh(now) and self.stable() and now >= self.distrusted_until):
             return False
         # SLAM 失跟判据: pose 冻在 ORB 原点附近 + 距上次有效基线漂移
+        # 注意: last_msg 是 PoseStamped, 取位置是 .pose.position(没有内层 .pose,
+        # 之前写 .pose.pose.position 会在狗离原点 0.5m 后必崩, watchdog 挂掉导致
+        # ok 冻在 True、融合位姿停更, navigator 拿冻结位姿继续开车 → 狗乱走)
         if self.last_msg is not None and self.last_good_pose is not None:
-            p = self.last_msg.pose.pose.position
-            origin_dist = math.sqrt(p.x ** 2 + p.y ** 2 + p.z ** 2)
+            p = self.last_msg.pose.position
+            origin_dist = math.hypot(p.x, p.z)  # 地面平面 = x-z, 忽略垂直轴 y
             if origin_dist < 0.15:  # 冻在原点附近 = 失跟典型
-                drift = math.sqrt(
-                    (p.x - self.last_good_pose.x) ** 2 +
-                    (p.y - self.last_good_pose.y) ** 2 +
-                    (p.z - self.last_good_pose.z) ** 2
-                )
+                drift = math.hypot(p.x - self.last_good_pose.x,
+                                   p.z - self.last_good_pose.z)
                 if drift > 0.5:  # 距正常走位漂移 > 0.5m
                     return False  # 判 SLAM 失跟, usable=False → ok=False → navigator 停狗
         return True
@@ -179,6 +190,8 @@ class LocalizationWatchdog(Node):
         self.declare_parameter("switch_suppress_sec", 2.5)
         self.declare_parameter("slam_distrust_sec", 2.0)
         self.declare_parameter("fault_grace_sec", 0.5)
+        # 朝向提取轴, 与 navigator/cone 节点保持一致(用于跳变/稳定性检测)
+        self.declare_parameter("yaw_axis", "y")
 
         pose_topic = str(self.get_parameter("pose_topic").value)
         pose_type = str(self.get_parameter("pose_type").value).lower()
@@ -202,6 +215,7 @@ class LocalizationWatchdog(Node):
             jump_pos,
             jump_yaw,
             float(self.get_parameter("slam_distrust_sec").value),
+            yaw_axis=str(self.get_parameter("yaw_axis").value),
         )
         self.tag = PoseTrack(
             "tag",
@@ -212,6 +226,7 @@ class LocalizationWatchdog(Node):
             jump_pos,
             jump_yaw,
             0.0,  # tag poses are absolute; no distrust window needed
+            yaw_axis=str(self.get_parameter("yaw_axis").value),
         )
 
         self.fused_pub = self.create_publisher(PoseStamped, fused_topic, 10)
@@ -315,12 +330,10 @@ class LocalizationWatchdog(Node):
             # SLAM 失跟分类: 冻在原点 + 距基线远 → "slam_drift_near_origin"
             if (track.name == "slam" and track.last_msg is not None
                     and track.last_good_pose is not None):
-                p = track.last_msg.pose.pose.position
-                if math.sqrt(p.x ** 2 + p.y ** 2 + p.z ** 2) < 0.15:
-                    drift = math.sqrt(
-                        (p.x - track.last_good_pose.x) ** 2 +
-                        (p.y - track.last_good_pose.y) ** 2 +
-                        (p.z - track.last_good_pose.z) ** 2)
+                p = track.last_msg.pose.position  # PoseStamped → .pose.position
+                if math.hypot(p.x, p.z) < 0.15:  # 地面平面 = x-z
+                    drift = math.hypot(p.x - track.last_good_pose.x,
+                                       p.z - track.last_good_pose.z)
                     if drift > 0.5:
                         return "slam_drift_near_origin"
             if track.last_time is None:

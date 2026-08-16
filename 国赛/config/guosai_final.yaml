@@ -94,6 +94,10 @@ navigation:
   max_vx: 0.28
   max_wz: 0.45
   rotate_in_place_angle: 0.75
+  # 朝向提取轴(2026-08-16): ORB 光学系下狗的朝向 = 绕 y(垂直轴)旋转, 故默认 y。
+  # 验证: 狗原地左转 90°, heading 应 ≈ +1.57; 若不符改 z 并重采航点 yaw。
+  # 修改后必须与 waypoint_capture_tool 的 --yaw-axis、cone_avoidance.yaw_axis 一致。
+  yaw_axis: y
 
 cone_avoidance:
   enabled_topic: /motion/enable_cone_avoidance
@@ -109,6 +113,7 @@ cone_avoidance:
   control_yaml: ${GUOSAI_ROOT}/cone_avoidance/config/control.yaml
   map_config: ${GUOSAI_ROOT}/cone_avoidance/competition_map.yaml
   pose_topic: /camera_pose_fused        # 用 watchdog 融合位姿（SLAM + AprilTag 兜底）
+  yaw_axis: y                           # 与 navigation.yaw_axis 保持一致
   depth_topic: /camera/camera/aligned_depth_to_color/image_raw
   depth_info_topic: /camera/camera/aligned_depth_to_color/camera_info
 
