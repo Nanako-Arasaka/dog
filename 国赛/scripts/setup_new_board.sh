@@ -225,9 +225,15 @@ install_ros2() {
 }
 
 # ----------------------------- 3. Python 依赖(pip) ------------------------
+# 基础库: 全部必装。pyrealsense2 为 RealSense 深度探测脚本所需(cone_avoidance/scripts),
+# 系统 Python 3.10 aarch64 有 wheel(勿在 conda 3.13 下装, 会找不到)。
 PIP_BASE=(
   numpy opencv-python PyYAML pyserial Pillow pytest
-  PyMuPDF openni pyorbbecsdk
+  PyMuPDF openni pyrealsense2
+)
+# 可选库: pyorbbecsdk 部分 pip 源无 aarch64 wheel, 装不上不阻塞(astra 深度可走 openni 后端)
+PIP_OPTIONAL=(
+  pyorbbecsdk
 )
 
 pip_install() {
@@ -276,6 +282,7 @@ install_python_deps() {
   fi
   log "安装 Python 依赖..."
   pip_install "基础库" "${PIP_BASE[@]}"
+  pip_install "可选库(pyorbbecsdk, 装不上不阻塞)" "${PIP_OPTIONAL[@]}"
   install_torch || true   # torch 失败不中断脚本, ultralytics 会按 torch 就绪状态跳过
   # ultralytics 依赖 torch, torch 装好才装
   if python3 -c "import torch" 2>/dev/null; then
