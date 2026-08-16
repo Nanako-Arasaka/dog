@@ -395,13 +395,15 @@ SLAM 主源 + AprilTag 绝对定位兜底，watchdog 仲裁后输出融合位姿
 
 ## 2026-08-16 修改记录：狗乱走根因修复（坐标系 + watchdog 崩溃）
 
-### 根因 1：ORB 光学系从未转换成导航平面（主因）
+### 根因 1：ORB 光学系地面平面是 x-z，而导航按 x-y 平面写（主因）
 
 ORB-SLAM3 RGBD（无 IMU）世界系 = 建图首帧相机光学系：**z 前、x 右、y 下**。
 地面平面是 **x-z**，y 是垂直轴。证据：航点采集数据 y≡0、z 单调 0→5.6m。
 而 navigator/cone 节点全部按 REP-103（地面=x-y、yaw=绕 z）写：
 - `atan2(dy, dx)` 里 dy≡0 → 目标方向恒为 0°/180°，与真实方向无关
-- `yaw_from_pose` 提取绕 z 旋转 = 相机 roll，不是狗的朝向（180° 转向检测不到）
+- `yaw_from_pose`（z-euler）对绕 y 轴（垂直轴）的转身退化：纯 y 旋转下恒 ≈0/π
+  （实机采集备份 waypoints_FINAL.yaml.bak_20260814_193325 全部 yaw≈0 证实），
+  不能当狗的朝向用 → 转向指令乱跳 → **狗乱跑**
 
 ### 根因 2：watchdog `pose.pose.position` 笔误（必崩）
 
@@ -410,34 +412,42 @@ ORB-SLAM3 RGBD（无 IMU）世界系 = 建图首帧相机光学系：**z 前、x
 watchdog 进程挂掉 → `/localization/ok` 冻在 True、融合位姿停更 → navigator 拿
 冻结位姿继续发指令 → **狗乱走的直接机制**。
 
-### 修改文件（5 个 + 2 配置 + 1 航点）
+### 修复方案（最终采用：保持 ORB 系 + 前向向量投影，航点 yaw 无需重采）
 
 | 文件 | 修改 |
 |------|------|
-| `nodes/waypoint_navigator.py` | `_update_pose` 转导航平面 `nav_x=z, nav_y=-x`；`heading_from_pose(pose, yaw_axis)`，默认绕 y；waypoints 文件 x/y 直接是导航平面坐标 |
-| `nodes/localization_watchdog.py` | 修 `.pose.pose.position`→`.pose.position`（2 处）；失跟判据/基线门限改平面距离 `hypot(x,z)`；内部 yaw 检测同用 heading 公式（新增 yaw_axis 参数） |
-| `nodes/cone_avoidance_node.py` | `_on_pose` 同款平面映射 + yaw_axis 参数 |
-| `scripts/waypoint_capture_tool.py` | 采集时同款转换（写导航平面坐标），新增 `--yaw-axis`（默认 y，必须与运行时一致） |
-| `launch/guosai_final.launch.py` | watchdog/navigator/cone 三节点贯通 `yaw_axis` 参数 |
-| `config/guosai_final.yaml` | `navigation.yaw_axis: y` + `cone_avoidance.yaw_axis: y` |
-| `cone_avoidance/competition_map.yaml` | global_path/zone 换算到导航平面（旧值是错误坐标系的锚点） |
-| `jetson_payload/slam_maps/waypoints_FINAL.yaml` | 位置已换算到导航平面（有效）；**yaw 仍是旧公式无效值，必须重采** |
+| `nodes/waypoint_navigator.py` | `heading_from_pose(pose, ground_plane, forward_axis)`：取四元数旋转矩阵前向轴（默认光学 z 轴），投影到地面平面 `heading=atan2(f_z,f_x)`，与 waypoints 的 yaw 约定（±π/2=面向±z）一致；`ground_plane=xz`（y 竖直）、`forward_axis=z`（光学）/`x`（ROS body）参数 |
+| `nodes/localization_watchdog.py` | 修 `.pose.pose.position`→`.pose.position`（2 处）；跳变/稳定性检测同用 heading 公式（避免退化 yaw 在正常转身时 0→π 跳变误触发 jump 保护） |
+| `nodes/cone_avoidance_node.py` | `RobotPose(x, y=position.z)`：修正竖直轴 y 进 planner 平面、前进方向 z 被丢弃的 bug；`heading_from_quaternion` 同款提取 |
+| `scripts/waypoint_capture_tool.py` | 采集时同款 heading 提取（保证未来采集 yaw 与航点文件约定一致） |
+| `launch/guosai_final.launch.py` | watchdog/navigator/cone 三节点贯通 `ground_plane`/`forward_axis`（+navigation `turn_sign`）参数 |
+| `config/guosai_final.yaml` | `navigation.ground_plane: xz` / `turn_sign: 1.0`；`cone_avoidance.ground_plane: xz` / `forward_axis: z` |
+| `cone_avoidance/competition_map.yaml` | global_path/zone 对齐真实障碍区（x 横向、z 前进） |
+| `tools/sim_waypoint_nav.py`（新） | 四元数级离线仿真：狗模型合成 /camera_pose（绕 y 旋转），新旧提取对比；新提取 13/13 收敛、旧 z-euler 0/1（复现乱跑） |
 
 ### ⚠️ 上机前必做（Jetson 现场）
 
-1. **验证 yaw 轴**（30 秒）：狗原地左转 90°，`ros2 topic echo /camera_pose` 取
-   orientation 四元数代入 heading 公式（绕 y），结果应 ≈ +1.57。不符则全局把
-   `yaw_axis` 改 `z`（config 两处 + 采集工具 `--yaw-axis z`）。
-2. **重采航点 yaw**：旧 waypoints 文件里的 yaw 是绕 z 轴提取的无效值。用更新后的
-   `waypoint_capture_tool.py` 重采（位置也会顺带刷新，狗需重新走到每个点）：
-   `bash scripts/guosai_onekey.sh collect`
-3. 航点重采后 `competition_map.yaml` 的 global_path 锚点若变化需同步更新。
+1. **验证朝向提取**（30 秒）：狗原地左转 90°，`ros2 topic echo /camera_pose` 取
+   orientation 代入 `heading_from_pose`（forward_axis=z），结果应 ≈ +1.57（面向
+   +z=+90°）。不符则把 `forward_axis` 改 `x`（config 两处 + 采集工具同步）。
+2. **验证转向符号**：首跑第一个转向若方向反了（该左转时右转），把
+   `run_waypoints_only.sh` 里 `TURN_SIGN` 改 `-1`。
+3. 当前 waypoints yaw（±1.58，面向±z 约定）**与 heading 公式一致，可直接用**；
+   仅当重新采集航点时用更新后的 `waypoint_capture_tool.py`（`--ground-plane xz`）。
 4. tag_localizer 未开（enabled: false）；将来开启时其四元数构造约定需与
-   yaw_axis 轴选择核对（当前按光学系公式，与 y 轴模式一致）。
+   forward_axis 选择核对。
 
 ### 验证状态
 
+- 数值验证：前向投影对纯 y 旋转精确恢复朝向（面向+z → +90°，航点 yaw=90.75°
+  偏差 0.75° ≪ 0.22rad 容差）；z-euler 恒 0/π 退化
+- `sim_waypoint_nav.py`：新提取 13/13 收敛（两种物理转向模型符号匹配时）；
+  旧 z-euler 0/1——第一个航点 dist=0.000 但 yaw_error 恒 ±1.6rad，原地转圈
+  6000 步不报 arrived，完整复现乱跑机制
 - 5 个 python 文件 py_compile 通过
-- `test_local_planner.py` + `test_cone_strategy.py` 12 passed（RobotPose 映射在
-  ROS 接入层，不影响 planner 单测）
-- 待现场：yaw 轴实测 → 航点重采 → 短距试跑 start_exit→obstacle_entry
+- 待现场：朝向实测 → 转向符号首跑裁决 → 短距试跑 start_exit→obstacle_entry
+
+> 注：此前协作方提交 7c0f096 采用「导航平面换算 nav_x=z, nav_y=-x + yaw_axis=y」
+> 方案（需重采航点 yaw）；经数据裁决后合并时统一为上述「保持 ORB 系 + 前向
+> 投影」方案（航点 yaw 直接可用、公式对 roll 免疫），7c0f096 的 nav 平面坐标
+> 改动未采纳。watchdog 崩溃修复双方一致。
