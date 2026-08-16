@@ -227,7 +227,7 @@ install_ros2() {
 # ----------------------------- 3. Python 依赖(pip) ------------------------
 PIP_BASE=(
   numpy opencv-python PyYAML pyserial Pillow pytest
-  PyMuPDF pyrealsense2 openni pyorbbecsdk
+  PyMuPDF openni pyorbbecsdk
 )
 
 pip_install() {
@@ -268,6 +268,12 @@ install_torch() {
 }
 
 install_python_deps() {
+  # conda 环境检测: ROS2 Humble + NVIDIA torch 均要求 Python 3.10/3.11, 3.12/3.13 会装不上
+  if [[ "$(which python3)" == *conda* || -n "${CONDA_DEFAULT_ENV:-}" ]]; then
+    warn "检测到 conda 环境 (Python $(python3 --version 2>/dev/null | awk '{print $2}'))。"
+    warn "ROS2 Humble 与 NVIDIA torch 需要系统 Python 3.10, 建议: conda deactivate 后重跑本脚本"
+    warn "（机械臂 SDK 也要求 /usr/bin/python3, 见 run_guosai_final.sh 约定）"
+  fi
   log "安装 Python 依赖..."
   pip_install "基础库" "${PIP_BASE[@]}"
   install_torch || true   # torch 失败不中断脚本, ultralytics 会按 torch 就绪状态跳过
@@ -300,6 +306,8 @@ build_colcon() {
     warn "colcon 不可用, 跳过仓库包编译(先安装 ROS2 / colcon 后重跑)"
     return 0
   fi
+  # empy: rosidl 编译自定义消息(ros_robot_controller_msgs)必需, 缺失会报 No module named 'em'
+  pip_install "empy(ROS2 消息编译必需)" "empy==3.3.4"
 
   # ros_robot_controller_msgs: 必须先编(机械臂自定义消息), 装到 arm_grasp/install
   if [[ -d "$ROOT_DIR/arm_grasp/ros_robot_controller_msgs" ]]; then
