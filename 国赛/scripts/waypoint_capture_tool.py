@@ -211,6 +211,7 @@ def main() -> int:
             print(f"  - name: {name}")
             print(f"    x: {pose['x']:.6f}")
             print(f"    y: {pose['y']:.6f}")
+            print(f"    z: {pose.get('z', 0.0):.6f}")
             print(f"    yaw: {pose['yaw']:.6f}")
             return 0
 
@@ -235,7 +236,7 @@ def main() -> int:
                     continue
                 save_waypoints(output, waypoints, order)
                 pose = waypoints[name]
-                print(f"[OK] {name}: x={pose['x']:.6f} y={pose['y']:.6f} yaw={pose['yaw']:.6f}")
+                print(f"[OK] {name}: x={pose['x']:.6f} y={pose['y']:.6f} z={pose.get('z', 0.0):.6f} yaw={pose['yaw']:.6f}")
                 print(f"[INFO] saved: {output}")
                 break
         print("\n[DONE] waypoint capture complete")
