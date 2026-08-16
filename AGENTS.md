@@ -451,3 +451,45 @@ watchdog 进程挂掉 → `/localization/ok` 冻在 True、融合位姿停更 �
 > 方案（需重采航点 yaw）；经数据裁决后合并时统一为上述「保持 ORB 系 + 前向
 > 投影」方案（航点 yaw 直接可用、公式对 roll 免疫），7c0f096 的 nav 平面坐标
 > 改动未采纳。watchdog 崩溃修复双方一致。
+
+## 2026-08-16 修改记录（2）：一键脚本现场四问题修复
+
+### 四个现场问题的根因与修复
+
+| # | 现象 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | SLAM 图像未就绪就进入下一步 | 就绪检查用 `timeout 3 ros2 topic hz`，但 topic hz 永不自己退出 → timeout 必返 124 → 检查恒假，15 轮循环耗尽后带病放行 | 检查全部改 `ros2 topic echo --once`（收到 1 条即退出码 0）；[3] 步图像 30s 不就绪硬退出并打印 realsense.log 末尾 |
+| 2 | 算力板发"站立"狗却趴下 | 0x21010202(stand_sit) 是 站立↔趴下 **切换**指令，狗已站立时再发 = 趴下 | [4] 步询问操作员狗姿态：默认已站立（只发 move_mode,walk_gait）；输入 l（趴着）才在启动动作前加 stand_sit |
+| 3 | 终端输出走航点但狗原地打转不前进 | turn_sign 反了 → 转向闭环发散：heading_error 越转越大永不收敛 → `abs(heading_error)>0.75rad` 时 vx 恒 0 只剩 wz → 无限原地转（与 sim_waypoint_nav.py 中"符号不匹配 0/1 收敛、原地转圈 6000 步"复现一致） | 新增 `scripts/calibrate_turn_sign.py` 自动标定；脚本默认 TURN_SIGN 改 **-1.0**（现场 +1 发散的证据） |
+| 4 | 终端一直刷"定位 OK 开始走航点"但狗不走 | walker 对每条 ok=True（10Hz）都打日志 → 刷屏；狗不走与 #3 同根因；另：重跑脚本产生双 mux/双 navigator 互踩（一个发速度一个发零速） | walker 改边沿触发日志；walker 退出时发空 goal 让 navigator 停狗；脚本 [0.5] 步按 pid 文件清理上次遗留节点 |
+
+### 新增 scripts/calibrate_turn_sign.py（转向符号/前向轴自标定）
+
+闭环符号直接测量，不依赖任何文档约定：
+
+- **A 转向符号**：发 `+wz=0.25` 原地转 2s，测 heading(atan2(f_z,f_x)) 变化方向。Δ>0 → turn_sign=+1.0；Δ<0 → -1.0；|Δ|<12° 判失败
+- **B 前向轴**：发 `+vx=0.18` 直走 2s，测位移方位与 heading 偏差。≈0° 保留当前轴；≈±90° 换另一根轴；其余判失败
+- 输出末行机器可读：`CALIB turn_sign=±1.0 forward_axis=z|x`（失败字段为 `?`，shell 按字段回退默认值）
+- 前提：watchdog + mux 已运行、狗已站立/移动模式/行走步态、周围 0.5m 净空（狗会原地转 ~30°、前走 ~0.4m）
+
+### run_waypoints_only.sh 流程调整
+
+```
+[0]网络 → [0.5]清理旧节点 → [1]RealSense → [2]ORB-SLAM3
+→ [3]等图像(硬失败) → [4]狗姿态询问+连狗桥 → [5]watchdog+mux
+→ [6]等定位OK → [6.5]自动标定(SKIP_TURN_CAL=1 跳过)
+→ [7]navigator(带标定值) → [8]walker
+```
+
+navigator 从 [5] 挪到 [6.5] 标定之后启动（turn_sign/forward_axis 必须先测出）。
+watchdog 仍用默认轴启动——heading 定义差常数 90° 不影响其跳变/稳定性判定（只看差分）。
+
+### waypoint_walker.py 修改
+
+- `_on_loc_ok` 改边沿触发：定位 OK/丢失只在状态翻转时打一条日志
+- 退出（完成/Ctrl-C）时发布空 goal → navigator `_clear_goal` → 停狗，防止 walker 退出后 navigator 继续驱狗
+
+### 验证状态
+
+- 3 个文件 `py_compile`/`bash -n` 通过
+- 待现场：`SKIP_TURN_CAL=0`（默认）跑一次，观察 [6.5] 输出的 turn_sign/forward_axis 与狗实际转向/直走方向是否吻合

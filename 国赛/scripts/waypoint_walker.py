@@ -62,9 +62,12 @@ class WaypointWalker(Node):
         self.done = False
 
     def _on_loc_ok(self, msg: Bool) -> None:
-        self.localization_ok = msg.data
-        if self.localization_ok and not self.done:
+        # 边沿触发: /localization/ok 以 10Hz 持续发布, 逐条打日志会刷屏
+        if msg.data and not self.localization_ok and not self.done:
             self.get_logger().info("定位 OK, 开始走航点")
+        elif not msg.data and self.localization_ok and not self.done:
+            self.get_logger().warn("定位丢失, 暂停走航点(等待恢复)")
+        self.localization_ok = msg.data
 
     def _on_status(self, msg: String) -> None:
         text = msg.data
@@ -128,6 +131,11 @@ def main() -> None:
     except KeyboardInterrupt:
         node.get_logger().info("interrupted")
     finally:
+        # 清空 goal → navigator 停狗(walker 退出后 navigator 不能继续驱狗)
+        if rclpy.ok():
+            node.goal_pub.publish(String(data=""))
+            for _ in range(10):
+                rclpy.spin_once(node, timeout_sec=0.05)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
