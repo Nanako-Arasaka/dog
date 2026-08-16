@@ -54,10 +54,10 @@ orbslam3:
     -r /camera/aligned_depth_to_color/image_raw:=/camera/camera/aligned_depth_to_color/image_raw
 
 tag_localizer:
-  # AprilTag 绝对定位兜底。tag 世界坐标必须先用 tools/calibrate_tags.py 现场标定，
-  # 否则 enabled 保持 false（占位坐标会输出错误位姿）。
-  enabled: false            # 标定完成并验证后置 true
-  fallback_enabled: true    # watchdog 是否允许切到 tag 源（enabled=false 时自动失效）
+  # ⚠️ 2026-08-17: 比赛规则不允许使用 AprilTag —— 本段全部保持禁用，
+  #   不得置 true。定位只依赖 ORB-SLAM3（单源），SLAM 丢失即安全停。
+  enabled: false             # 规则禁用，不得启用
+  fallback_enabled: false    # 规则禁用，watchdog 不订阅 tag 源（防止误切）
   tags_yaml: ${GUOSAI_ROOT}/config/tags.yaml
   pose_topic: /tag_localizer/pose
   status_topic: /tag_localizer/status
@@ -65,7 +65,7 @@ tag_localizer:
   frame_id: map
   detect_hz: 10.0
   min_decision_margin: 12.0
-  # --- watchdog 仲裁参数 ---
+  # --- watchdog 仲裁参数（tag 禁用后仅剩 SLAM 源，下述参数不再生效）---
   tag_timeout_sec: 1.0        # tag 位姿新鲜度窗口
   tag_stable_samples: 3       # tag 源稳定所需连续帧（比 SLAM 短，兜底要快）
   switch_suppress_sec: 2.5    # 源切换迟滞窗口，防 slam/tag 乒乓
