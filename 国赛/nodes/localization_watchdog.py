@@ -87,6 +87,7 @@ class PoseTrack:
         self.distrust_sec = distrust_sec
         self.samples: deque[Pose2D] = deque(maxlen=max(2, stable_samples))
         self.last_pose: Optional[Pose2D] = None
+        self.last_good_pose: Optional[Pose2D] = None  # 远离 ORB 原点的基线,用于判 SLAM 失跟
         self.last_msg: Optional[PoseStamped] = None
         self.last_time: Optional[float] = None
         self.distrusted_until = 0.0
@@ -107,6 +108,9 @@ class PoseTrack:
                 self.distrusted_until = now + self.distrust_sec
             else:
                 self.samples.append(current)
+                # 远离 ORB 原点 → 记为基线(失跟判据用);启动期 dog 在原点附近不记
+                if math.sqrt(current.x ** 2 + current.y ** 2 + current.z ** 2) > 0.5:
+                    self.last_good_pose = current
         else:
             self.samples.append(current)
         self.last_pose = current
@@ -133,7 +137,21 @@ class PoseTrack:
         return True
 
     def usable(self, now: float) -> bool:
-        return self.fresh(now) and self.stable() and now >= self.distrusted_until
+        if not (self.fresh(now) and self.stable() and now >= self.distrusted_until):
+            return False
+        # SLAM 失跟判据: pose 冻在 ORB 原点附近 + 距上次有效基线漂移
+        if self.last_msg is not None and self.last_good_pose is not None:
+            p = self.last_msg.pose.pose.position
+            origin_dist = math.sqrt(p.x ** 2 + p.y ** 2 + p.z ** 2)
+            if origin_dist < 0.15:  # 冻在原点附近 = 失跟典型
+                drift = math.sqrt(
+                    (p.x - self.last_good_pose.x) ** 2 +
+                    (p.y - self.last_good_pose.y) ** 2 +
+                    (p.z - self.last_good_pose.z) ** 2
+                )
+                if drift > 0.5:  # 距正常走位漂移 > 0.5m
+                    return False  # 判 SLAM 失跟, usable=False → ok=False → navigator 停狗
+        return True
 
 
 class LocalizationWatchdog(Node):
@@ -294,6 +312,17 @@ class LocalizationWatchdog(Node):
             return "waiting_for_pose"
         parts = []
         for track in (self.slam, self.tag):
+            # SLAM 失跟分类: 冻在原点 + 距基线远 → "slam_drift_near_origin"
+            if (track.name == "slam" and track.last_msg is not None
+                    and track.last_good_pose is not None):
+                p = track.last_msg.pose.pose.position
+                if math.sqrt(p.x ** 2 + p.y ** 2 + p.z ** 2) < 0.15:
+                    drift = math.sqrt(
+                        (p.x - track.last_good_pose.x) ** 2 +
+                        (p.y - track.last_good_pose.y) ** 2 +
+                        (p.z - track.last_good_pose.z) ** 2)
+                    if drift > 0.5:
+                        return "slam_drift_near_origin"
             if track.last_time is None:
                 parts.append(f"{track.name}:no_data")
             elif not track.fresh(now):
