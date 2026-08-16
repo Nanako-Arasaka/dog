@@ -110,31 +110,61 @@ if ! "${SUDO[@]}" true 2>/dev/null; then
 fi
 
 # ----------------------------- 1. 拉取仓库 --------------------------------
+# 支持两种布局:
+#   A) 仓库根 = 项目根(当前目录有 config/guosai_final.yaml 和 .git)
+#   B) 项目是仓库子目录(当前目录有 config, 但 .git 在上层, 如 dog_repo/国赛)
 fetch_repo() {
-  local here
+  local here toplevel found
   here="$(pwd)"
-  if [[ -f "$here/config/guosai_final.yaml" && -d "$here/.git" ]]; then
+
+  if [[ -f "$here/config/guosai_final.yaml" ]]; then
+    # ---- 当前目录就是项目根 ----
     ROOT_DIR="$here"
-    log "已在仓库内: $ROOT_DIR"
-    git pull --rebase || warn "git pull 失败(可能无网络/未配置 remote), 继续使用现有代码"
-  else
-    mkdir -p "$(dirname "$TARGET_DIR")"
-    if [[ -d "$TARGET_DIR/.git" ]]; then
-      ROOT_DIR="$TARGET_DIR"
-      log "目标目录已是仓库: $TARGET_DIR"
-      git -C "$ROOT_DIR" pull --rebase || warn "git pull 失败, 继续使用现有代码"
+    log "检测到项目根: $ROOT_DIR"
+    if [[ -d "$here/.git" ]]; then
+      log "已在 git 仓库内, git pull..."
+      git -C "$here" pull --rebase || warn "git pull 失败(可能无网络/未配置 remote), 继续使用现有代码"
     else
-      log "克隆仓库 $REPO_URL (分支 $BRANCH) -> $TARGET_DIR"
-      git clone -b "$BRANCH" "$REPO_URL" "$TARGET_DIR" \
-        || die "git clone 失败: $REPO_URL"
-      ROOT_DIR="$TARGET_DIR"
+      toplevel="$(git -C "$here" rev-parse --show-toplevel 2>/dev/null || true)"
+      if [[ -n "$toplevel" ]]; then
+        log "git 仓库根在上层: $toplevel (项目是仓库子目录)"
+        git -C "$toplevel" pull --rebase || warn "git pull 失败(可能无网络/未配置 remote), 继续使用现有代码"
+      else
+        warn "当前目录有项目文件但不是 git 仓库, 跳过拉取(直接使用现有文件)"
+      fi
     fi
-    cd "$ROOT_DIR"
+  else
+    # ---- 当前目录不是项目根 ----
+    toplevel="$(git -C "$here" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$toplevel" ]]; then
+      # 在 git 仓库内: 向上定位含 config/guosai_final.yaml 的项目目录
+      found="$(find "$toplevel" -maxdepth 3 -name guosai_final.yaml -path '*/config/*' 2>/dev/null | head -1)"
+      if [[ -n "$found" ]]; then
+        ROOT_DIR="$(dirname "$(dirname "$found")")"
+        log "仓库内定位到项目根: $ROOT_DIR"
+        git -C "$toplevel" pull --rebase || warn "git pull 失败, 继续使用现有代码"
+      else
+        die "在 git 仓库 $toplevel 内未找到 config/guosai_final.yaml, 无法定位项目根"
+      fi
+    else
+      # ---- 不在任何 git 仓库: clone ----
+      mkdir -p "$(dirname "$TARGET_DIR")"
+      if [[ -d "$TARGET_DIR/.git" ]]; then
+        ROOT_DIR="$TARGET_DIR"
+        log "目标目录已是仓库: $TARGET_DIR"
+        git -C "$ROOT_DIR" pull --rebase || warn "git pull 失败, 继续使用现有代码"
+      else
+        log "克隆仓库 $REPO_URL (分支 $BRANCH) -> $TARGET_DIR"
+        git clone -b "$BRANCH" "$REPO_URL" "$TARGET_DIR" \
+          || die "git clone 失败: $REPO_URL"
+        ROOT_DIR="$TARGET_DIR"
+      fi
+    fi
   fi
   export GUOSAI_ROOT="$ROOT_DIR"
   # LFS 大文件(SLAM 地图 .osa)
   if command -v git-lfs >/dev/null 2>&1; then
-    git lfs pull || warn "git lfs pull 失败, 地图文件可能缺失"
+    git -C "$ROOT_DIR" lfs pull || warn "git lfs pull 失败, 地图文件可能缺失"
   else
     warn "git-lfs 未安装, 跳过 LFS 拉取(稍后 apt 会装, 可重跑本脚本)"
   fi
