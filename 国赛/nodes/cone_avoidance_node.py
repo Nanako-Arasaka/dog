@@ -71,10 +71,22 @@ def load_control_config(path_text: str) -> ControlConfig:
     return ControlConfig(**filtered)
 
 
-def yaw_from_quaternion(qx: float, qy: float, qz: float, qw: float) -> float:
-    siny_cosp = 2.0 * (qw * qz + qx * qy)
-    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-    return math.atan2(siny_cosp, cosy_cosp)
+def heading_from_quaternion(qx: float, qy: float, qz: float, qw: float,
+                            ground_plane: str = "xz", forward_axis: str = "z") -> float:
+    """前向向量投影提取地面朝向 (与 waypoint_navigator 同约定)。
+
+    ORB 世界系 y 竖直、地面 x-z: z-euler yaw 对绕 y 轴转身退化 (恒 ≈0/π),
+    必须用前向向量投影 atan2(f_z, f_x)。
+    """
+    if forward_axis == "x":
+        fx = 1.0 - 2.0 * (qy * qy + qz * qz)
+        fz = 2.0 * (qx * qz - qw * qy)
+    else:
+        fx = 2.0 * (qx * qz + qw * qy)
+        fz = 1.0 - 2.0 * (qx * qx + qy * qy)
+    if ground_plane == "xz":
+        return math.atan2(fz, fx)
+    return math.atan2(2.0 * (qy * qz - qw * qx), fx)
 
 
 class ConeAvoidanceNode(Node):
@@ -91,6 +103,9 @@ class ConeAvoidanceNode(Node):
         self.declare_parameter("control_yaml", str(ROOT / "cone_avoidance" / "config" / "control.yaml"))
         self.declare_parameter("map_config", str(ROOT / "cone_avoidance" / "competition_map.yaml"))
         self.declare_parameter("pose_topic", "/camera_pose")
+        # 朝向提取约定 (与 waypoint_navigator / watchdog 一致)
+        self.declare_parameter("ground_plane", "xz")
+        self.declare_parameter("forward_axis", "z")
         self.declare_parameter("depth_topic", "/camera/camera/aligned_depth_to_color/image_raw")
         self.declare_parameter("depth_info_topic", "/camera/camera/aligned_depth_to_color/camera_info")
 
@@ -142,10 +157,16 @@ class ConeAvoidanceNode(Node):
 
     def _on_pose(self, msg: PoseStamped) -> None:
         p = msg.pose
+        # planner 2D 平面 = ORB 世界 (x, z): y 是竖直轴不能进平面, 前进方向是 z
         self.latest_pose = RobotPose(
             x=float(p.position.x),
-            y=float(p.position.y),
-            yaw=yaw_from_quaternion(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w),
+            y=float(p.position.z),
+            yaw=heading_from_quaternion(
+                float(p.orientation.x), float(p.orientation.y),
+                float(p.orientation.z), float(p.orientation.w),
+                str(self.get_parameter("ground_plane").value).lower(),
+                str(self.get_parameter("forward_axis").value).lower(),
+            ),
         )
 
     def _on_depth(self, msg: Image) -> None:

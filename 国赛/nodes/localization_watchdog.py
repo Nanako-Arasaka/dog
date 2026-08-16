@@ -48,11 +48,25 @@ class Pose2D:
     yaw: float
 
 
-def yaw_from_pose(pose: Pose) -> float:
+def heading_from_pose(pose: Pose, ground_plane: str = "xz", forward_axis: str = "z") -> float:
+    """从四元数用前向向量投影提取地面朝向 (而非 z-euler yaw)。
+
+    ORB 世界系 y 近似竖直、地面 = x-z: 绕 y 轴的真实转身使 z-euler yaw 退化
+    (恒 ≈0/π, 实机数据证实), 用它判跳变会在狗转过 ±90° 时误报 yaw 跳变。
+    前向向量投影 atan2(f_z, f_x) 才是真实朝向, 且转身时连续变化。
+    """
     q = pose.orientation
-    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-    return math.atan2(siny_cosp, cosy_cosp)
+    if forward_axis == "x":
+        fx = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        fz = 2.0 * (q.x * q.z - q.w * q.y)
+        fy = 2.0 * (q.x * q.y + q.w * q.z)
+    else:
+        fx = 2.0 * (q.x * q.z + q.w * q.y)
+        fz = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+        fy = 2.0 * (q.y * q.z - q.w * q.x)
+    if ground_plane == "xz":
+        return math.atan2(fz, fx)
+    return math.atan2(fy, fx)
 
 
 def angle_diff(a: float, b: float) -> float:
@@ -77,6 +91,8 @@ class PoseTrack:
         jump_position_threshold: float,
         jump_yaw_threshold: float,
         distrust_sec: float,
+        ground_plane: str = "xz",
+        forward_axis: str = "z",
     ) -> None:
         self.name = name
         self.timeout_sec = timeout_sec
@@ -85,6 +101,8 @@ class PoseTrack:
         self.jump_position_threshold = jump_position_threshold
         self.jump_yaw_threshold = jump_yaw_threshold
         self.distrust_sec = distrust_sec
+        self.ground_plane = ground_plane
+        self.forward_axis = forward_axis
         self.samples: deque[Pose2D] = deque(maxlen=max(2, stable_samples))
         self.last_pose: Optional[Pose2D] = None
         self.last_good_pose: Optional[Pose2D] = None  # 远离 ORB 原点的基线,用于判 SLAM 失跟
@@ -95,7 +113,8 @@ class PoseTrack:
     def update(self, pose: Pose, msg: PoseStamped, now: float) -> str:
         """Ingest one pose. Returns 'ok' or 'jump'."""
         current = Pose2D(float(pose.position.x), float(pose.position.y),
-                         float(pose.position.z), yaw_from_pose(pose))
+                         float(pose.position.z),
+                         heading_from_pose(pose, self.ground_plane, self.forward_axis))
         event = "ok"
         if self.last_pose is not None:
             dist = math.sqrt((current.x - self.last_pose.x) ** 2 +
@@ -141,7 +160,7 @@ class PoseTrack:
             return False
         # SLAM 失跟判据: pose 冻在 ORB 原点附近 + 距上次有效基线漂移
         if self.last_msg is not None and self.last_good_pose is not None:
-            p = self.last_msg.pose.pose.position
+            p = self.last_msg.pose.position
             origin_dist = math.sqrt(p.x ** 2 + p.y ** 2 + p.z ** 2)
             if origin_dist < 0.15:  # 冻在原点附近 = 失跟典型
                 drift = math.sqrt(
@@ -170,6 +189,9 @@ class LocalizationWatchdog(Node):
         self.declare_parameter("pose_timeout_sec", 0.8)
         self.declare_parameter("jump_position_threshold", 0.45)
         self.declare_parameter("jump_yaw_threshold", 1.2)
+        # 朝向提取约定 (与 waypoint_navigator 一致): xz 地面 + 光学相机前向轴。
+        self.declare_parameter("ground_plane", "xz")
+        self.declare_parameter("forward_axis", "z")
         # --- AprilTag fallback params (new) ---
         self.declare_parameter("tag_pose_topic", "/tag_localizer/pose")
         self.declare_parameter("fused_pose_topic", "/camera_pose_fused")
@@ -192,6 +214,8 @@ class LocalizationWatchdog(Node):
         max_yaw_step = float(self.get_parameter("stable_max_yaw_step").value)
         jump_pos = float(self.get_parameter("jump_position_threshold").value)
         jump_yaw = float(self.get_parameter("jump_yaw_threshold").value)
+        ground_plane = str(self.get_parameter("ground_plane").value).lower()
+        forward_axis = str(self.get_parameter("forward_axis").value).lower()
 
         self.slam = PoseTrack(
             "slam",
@@ -202,6 +226,8 @@ class LocalizationWatchdog(Node):
             jump_pos,
             jump_yaw,
             float(self.get_parameter("slam_distrust_sec").value),
+            ground_plane,
+            forward_axis,
         )
         self.tag = PoseTrack(
             "tag",
@@ -212,6 +238,8 @@ class LocalizationWatchdog(Node):
             jump_pos,
             jump_yaw,
             0.0,  # tag poses are absolute; no distrust window needed
+            ground_plane,
+            forward_axis,
         )
 
         self.fused_pub = self.create_publisher(PoseStamped, fused_topic, 10)
@@ -315,7 +343,7 @@ class LocalizationWatchdog(Node):
             # SLAM 失跟分类: 冻在原点 + 距基线远 → "slam_drift_near_origin"
             if (track.name == "slam" and track.last_msg is not None
                     and track.last_good_pose is not None):
-                p = track.last_msg.pose.pose.position
+                p = track.last_msg.pose.position
                 if math.sqrt(p.x ** 2 + p.y ** 2 + p.z ** 2) < 0.15:
                     drift = math.sqrt(
                         (p.x - track.last_good_pose.x) ** 2 +

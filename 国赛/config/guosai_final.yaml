@@ -18,6 +18,9 @@ slam:
   pose_timeout_sec: 0.8
   jump_position_threshold: 0.45
   jump_yaw_threshold: 1.2
+  # 朝向提取约定 (与 navigation 段一致): z-euler yaw 在 xz 地面系退化, 必须用前向向量投影
+  ground_plane: xz
+  forward_axis: z
 
 realsense:
   color_topic: /camera/camera/color/image_raw
@@ -94,6 +97,12 @@ navigation:
   max_vx: 0.28
   max_wz: 0.45
   rotate_in_place_angle: 0.75
+  # ORB 世界系地面平面 x-z (y 近似竖直); 航向 atan2(dz,dx) 与航点 yaw 同约定。
+  ground_plane: xz
+  # /camera_pose 姿态的前向轴: z=光学相机(默认), x=ROS body。朝向恒差 90° 时切换。
+  forward_axis: z
+  # 若上机发现转向方向相反(该左转时右转), 改为 -1.0。
+  turn_sign: 1.0
 
 cone_avoidance:
   enabled_topic: /motion/enable_cone_avoidance
@@ -111,6 +120,9 @@ cone_avoidance:
   pose_topic: /camera_pose_fused        # 用 watchdog 融合位姿（SLAM + AprilTag 兜底）
   depth_topic: /camera/camera/aligned_depth_to_color/image_raw
   depth_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+  # ORB 世界系地面平面 x-z (y 竖直); 前向轴 z=光学相机。与 navigation 段同约定。
+  ground_plane: xz
+  forward_axis: z
 
 inspection:
   # 正式链路用 7 类模型(live_detect.py + best_7class.pt)。

@@ -37,11 +37,29 @@ def normalize_angle(angle: float) -> float:
     return angle
 
 
-def yaw_from_pose(pose: Pose) -> float:
+def heading_from_pose(pose: Pose, ground_plane: str = "xz", forward_axis: str = "z") -> float:
+    """从四元数用前向向量投影提取地面朝向 (而非 z-euler yaw)。
+
+    ORB 世界系: y 近似竖直, 地面 = x-z 平面。狗原地转身是绕世界 y 轴的旋转,
+    此时 z-euler yaw 退化 (恒 ≈0/π, 实机采集数据已证实), 不能当朝向用。
+    正确做法: 取相机前向轴在世界系下的向量 f, 投影到地面平面,
+    heading = atan2(f_z, f_x) —— 与 waypoints_FINAL.yaml 的 yaw 约定
+    (仿射转换生成的 atan2(dz,dx) 航向, 面向 +z = +90°) 一致。
+    """
     q = pose.orientation
-    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-    return math.atan2(siny_cosp, cosy_cosp)
+    if forward_axis == "x":
+        # 前向轴 = 旋转矩阵第一列 (发布姿态为 ROS body 约定时用)
+        fx = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        fy = 2.0 * (q.x * q.y + q.w * q.z)
+        fz = 2.0 * (q.x * q.z - q.w * q.y)
+    else:
+        # 前向轴 = 旋转矩阵第三列 (光学相机约定, 默认)
+        fx = 2.0 * (q.x * q.z + q.w * q.y)
+        fy = 2.0 * (q.y * q.z - q.w * q.x)
+        fz = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+    if ground_plane == "xz":
+        return math.atan2(fz, fx)
+    return math.atan2(fy, fx)
 
 
 class WaypointNavigator(Node):
@@ -61,6 +79,12 @@ class WaypointNavigator(Node):
         self.declare_parameter("max_vx", 0.28)
         self.declare_parameter("max_wz", 0.45)
         self.declare_parameter("rotate_in_place_angle", 0.75)
+        # ORB 世界系地面平面: 航向/距离在此平面上计算 (y 轴近似竖直)。
+        self.declare_parameter("ground_plane", "xz")
+        # 发布姿态的前向轴: "z"=光学相机约定(默认), "x"=ROS body 约定。
+        self.declare_parameter("forward_axis", "z")
+        # 实机转向符号微调: 若上机发现"该左转时右转", 置 -1 即可翻转, 无需改代码。
+        self.declare_parameter("turn_sign", 1.0)
 
         self.pose_topic = str(self.get_parameter("pose_topic").value)
         self.pose_type = str(self.get_parameter("pose_type").value).lower()
@@ -71,6 +95,13 @@ class WaypointNavigator(Node):
         self.max_vx = float(self.get_parameter("max_vx").value)
         self.max_wz = float(self.get_parameter("max_wz").value)
         self.rotate_in_place_angle = float(self.get_parameter("rotate_in_place_angle").value)
+        self.ground_plane = str(self.get_parameter("ground_plane").value).lower()
+        self.forward_axis = str(self.get_parameter("forward_axis").value).lower()
+        self.turn_sign = float(self.get_parameter("turn_sign").value)
+        if self.ground_plane not in ("xz", "xy"):
+            raise ValueError("ground_plane must be 'xz' or 'xy'")
+        if self.forward_axis not in ("z", "x"):
+            raise ValueError("forward_axis must be 'z' or 'x'")
 
         self.waypoints = self._load_waypoints(str(self.get_parameter("waypoints_yaml").value))
         self.current_pose: Pose2D | None = None
@@ -131,8 +162,9 @@ class WaypointNavigator(Node):
         self._update_pose(msg.pose.pose)
 
     def _update_pose(self, pose: Pose) -> None:
-        self.current_pose = Pose2D(float(pose.position.x), float(pose.position.y),
-                                   float(pose.position.z), yaw_from_pose(pose))
+        self.current_pose = Pose2D(
+            float(pose.position.x), float(pose.position.y), float(pose.position.z),
+            heading_from_pose(pose, self.ground_plane, self.forward_axis))
 
     def _on_loc_ok(self, msg: Bool) -> None:
         self.localization_ok = bool(msg.data)
@@ -152,7 +184,8 @@ class WaypointNavigator(Node):
         self.arrived = False
         self.get_logger().info(
             f"new waypoint {name}: x={self.current_goal.x:.2f} "
-            f"y={self.current_goal.y:.2f} yaw={self.current_goal.yaw:.2f}"
+            f"z={self.current_goal.z:.2f} yaw={self.current_goal.yaw:.2f} "
+            f"(plane={self.ground_plane}, turn_sign={self.turn_sign:+.0f})"
         )
         self.status_pub.publish(String(data=f"active:{name}"))
 
@@ -175,7 +208,14 @@ class WaypointNavigator(Node):
         dx = self.current_goal.x - self.current_pose.x
         dy = self.current_goal.y - self.current_pose.y
         dz = self.current_goal.z - self.current_pose.z
-        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if self.ground_plane == "xz":
+            # ORB 世界系: y 近似竖直, 地面为 x-z 平面; 航向从 +x 转向 +z 为正,
+            # 与 /camera_pose 四元数的 z-euler yaw 同约定 (与航点采集工具一致)。
+            distance = math.sqrt(dx * dx + dz * dz)
+            bearing = math.atan2(dz, dx)
+        else:
+            distance = math.sqrt(dx * dx + dy * dy)
+            bearing = math.atan2(dy, dx)
         yaw_error = normalize_angle(self.current_goal.yaw - self.current_pose.yaw)
 
         if distance <= self.goal_tolerance and abs(yaw_error) <= self.yaw_tolerance:
@@ -186,10 +226,12 @@ class WaypointNavigator(Node):
             self._publish_stop()
             return
 
-        heading_error = normalize_angle(math.atan2(dy, dx) - self.current_pose.yaw)
+        heading_error = normalize_angle(bearing - self.current_pose.yaw)
         twist = Twist()
         if distance <= self.goal_tolerance:
-            twist.angular.z = clamp(self.kp_angular * yaw_error, -self.max_wz, self.max_wz)
+            twist.angular.z = self.turn_sign * clamp(
+                self.kp_angular * yaw_error, -self.max_wz, self.max_wz
+            )
         else:
             if abs(heading_error) <= self.rotate_in_place_angle:
                 twist.linear.x = clamp(
@@ -197,7 +239,9 @@ class WaypointNavigator(Node):
                     0.0,
                     self.max_vx,
                 )
-            twist.angular.z = clamp(self.kp_angular * heading_error, -self.max_wz, self.max_wz)
+            twist.angular.z = self.turn_sign * clamp(
+                self.kp_angular * heading_error, -self.max_wz, self.max_wz
+            )
         self.cmd_pub.publish(twist)
         self.status_pub.publish(String(data=f"moving:{self.current_goal_name}:{distance:.2f}"))
 

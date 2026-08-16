@@ -18,6 +18,12 @@ ROBOT_IP="192.168.1.120"
 ROBOT_PORT="43893"
 LISTEN_PORT="5005"
 GOAL_TIMEOUT=60.0
+# 转向符号: 若上机发现"该左转时右转"(狗背对目标绕圈), 改成 -1.0 重跑即可。
+# 地面平面 = ORB 世界系 x-z (y 竖直), 航向 atan2(dz,dx), 与航点 yaw 同约定。
+# FORWARD_AXIS: /camera_pose 姿态的前向轴, z=光学相机(默认)。若狗到位后
+# 朝向恒差 90°, 改成 x。
+TURN_SIGN=1.0
+FORWARD_AXIS="z"
 
 # 环境
 set +u
@@ -125,6 +131,7 @@ echo "=== [5] 起导航节点 (watchdog + navigator + mux) ==="
 nohup python3 "$ROOT_DIR/nodes/localization_watchdog.py" \
   --ros-args -p pose_topic:=/camera_pose -p fused_pose_topic:=/camera_pose_fused \
   -p ok_topic:=/localization/ok -p stop_topic:=/motion/stop \
+  -p ground_plane:=xz -p forward_axis:=$FORWARD_AXIS \
   > /tmp/slam_logs/watchdog.log 2>&1 &
 echo $! > /tmp/slam_logs/watchdog.pid
 disown
@@ -135,6 +142,7 @@ nohup python3 "$ROOT_DIR/nodes/waypoint_navigator.py" \
   -p pose_topic:=/camera_pose_fused -p goal_topic:=/waypoint/goal \
   -p status_topic:=/waypoint/status -p cmd_topic:=/motion/nav_cmd \
   -p localization_ok_topic:=/localization/ok \
+  -p ground_plane:=xz -p forward_axis:=$FORWARD_AXIS -p turn_sign:=$TURN_SIGN \
   > /tmp/slam_logs/navigator.log 2>&1 &
 echo $! > /tmp/slam_logs/navigator.pid
 disown

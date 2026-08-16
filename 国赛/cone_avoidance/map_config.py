@@ -8,11 +8,16 @@ from typing import Any, Mapping, Sequence
 
 @dataclass(frozen=True)
 class ObstacleZoneRect:
+    """障碍区长方形, planner 2D 平面坐标 (= ORB 世界系 x-z 地面平面)。
+
+    xmin/xmax → 世界 x (横向); ymin/ymax → 世界 z (前进方向);
+    zmin/zmax → 世界 y (竖直, 仅供 contains(x,y,z) 三参调用时生效)。
+    """
+
     xmin: float
     xmax: float
     ymin: float
     ymax: float
-    # 可选 z 范围(ORB 世界系 z 可能是前进方向)。缺省 = 不限制 z。
     zmin: float = float("-inf")
     zmax: float = float("inf")
 

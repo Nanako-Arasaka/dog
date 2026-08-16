@@ -36,11 +36,25 @@ DEFAULT_WAYPOINTS = [
 ]
 
 
-def yaw_from_pose(pose: Pose) -> float:
+def yaw_from_pose(pose: Pose, ground_plane: str = "xz", forward_axis: str = "z") -> float:
+    """朝向 = 前向向量在地面平面的投影 (与 waypoint_navigator 同一约定)。
+
+    ORB 世界系 y 竖直、地面 = x-z: z-euler yaw 对绕 y 轴的真实转身退化
+    (恒 ≈0/π), 不能当朝向存进 yaml。此处必须与导航器用同一提取方式,
+    否则采集的 yaw 与运行时位姿朝向不同约定, 到点转向永远失败。
+    """
     q = pose.orientation
-    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-    return math.atan2(siny_cosp, cosy_cosp)
+    if forward_axis == "x":
+        fx = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        fy = 2.0 * (q.x * q.y + q.w * q.z)
+        fz = 2.0 * (q.x * q.z - q.w * q.y)
+    else:
+        fx = 2.0 * (q.x * q.z + q.w * q.y)
+        fy = 2.0 * (q.y * q.z - q.w * q.x)
+        fz = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+    if ground_plane == "xz":
+        return math.atan2(fz, fx)
+    return math.atan2(fy, fx)
 
 
 def normalize_angle(angle: float) -> float:
@@ -107,10 +121,13 @@ def save_waypoints(path: Path, waypoints: dict[str, dict[str, float]], order: li
 
 
 class PoseSampler(Node):
-    def __init__(self, pose_topic: str, pose_type: str, stable_samples: int) -> None:
+    def __init__(self, pose_topic: str, pose_type: str, stable_samples: int,
+                 ground_plane: str = "xz", forward_axis: str = "z") -> None:
         super().__init__("waypoint_capture_tool")
         self.samples: list[tuple[float, float, float]] = []
         self.stable_samples = stable_samples
+        self.ground_plane = ground_plane
+        self.forward_axis = forward_axis
         pose_type = pose_type.lower()
         if pose_type in ("pose_stamped", "posestamped", "pose"):
             self.create_subscription(PoseStamped, pose_topic, self._on_pose_stamped, 10)
@@ -127,7 +144,8 @@ class PoseSampler(Node):
 
     def _append_pose(self, pose: Pose) -> None:
         self.samples.append((float(pose.position.x), float(pose.position.y),
-                             float(pose.position.z), yaw_from_pose(pose)))
+                             float(pose.position.z),
+                             yaw_from_pose(pose, self.ground_plane, self.forward_axis)))
         if len(self.samples) > max(2, self.stable_samples * 3):
             self.samples = self.samples[-self.stable_samples * 3 :]
 
@@ -171,6 +189,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, help="waypoints_FINAL.yaml output path")
     parser.add_argument("--pose-topic", default="/camera_pose")
     parser.add_argument("--pose-type", default="pose_stamped")
+    parser.add_argument("--ground-plane", default="xz", choices=("xz", "xy"),
+                        help="地面平面 (ORB 世界系默认 xz, y 竖直)")
+    parser.add_argument("--forward-axis", default="z", choices=("z", "x"),
+                        help="发布姿态的前向轴: z=光学相机(默认), x=ROS body")
     parser.add_argument("--stable-samples", type=int, default=10)
     parser.add_argument("--stable-max-position-step", type=float, default=0.04)
     parser.add_argument("--stable-max-yaw-step", type=float, default=0.18)
@@ -199,7 +221,8 @@ def main() -> int:
 
     waypoints = load_waypoints(output)
     rclpy.init()
-    sampler = PoseSampler(args.pose_topic, args.pose_type, max(2, args.stable_samples))
+    sampler = PoseSampler(args.pose_topic, args.pose_type, max(2, args.stable_samples),
+                          args.ground_plane, args.forward_axis)
     try:
         if args.single:
             name = args.single.strip()
