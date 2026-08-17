@@ -62,16 +62,34 @@ fi
 
 # ---------- 2. ORB-SLAM3 本体 ----------
 log "===== 2/5 ORB-SLAM3 本体 ====="
-if [[ -f "$ORBSLAM_DIR/Thirdparty/Pangolin/CMakeLists.txt" && -d "$ORBSLAM_DIR/src" ]]; then
-  ok "ORB-SLAM3 源码已就绪(含 Thirdparty/Pangolin), 跳过 clone"
-elif [[ -d "$ORBSLAM_DIR/.git" ]]; then
-  log "ORB-SLAM3 已存在但缺子模块, 补拉 Pangolin..."
-  git -C "$ORBSLAM_DIR" submodule update --init --recursive
+if [[ -d "$ORBSLAM_DIR/Thirdparty/DBoW2" && -d "$ORBSLAM_DIR/src" ]]; then
+  ok "ORB-SLAM3 源码已就绪(DBoW2/g2o/Sophus 齐全), 跳过 clone"
 else
-  log "克隆官方 ORB-SLAM3 (含 submodule, 较慢)..."
-  git clone --recursive https://github.com/UZ-SLAMLab/ORB_SLAM3.git "$ORBSLAM_DIR"
+  log "克隆官方 ORB-SLAM3..."
+  git clone https://github.com/UZ-SLAMLab/ORB_SLAM3.git "$ORBSLAM_DIR"
 fi
 cd "$ORBSLAM_DIR"
+
+# Pangolin: 官方新版 Thirdparty 不带, 需单独编译安装(系统级, ORB-SLAM3 find_package 依赖)
+install_pangolin() {
+  if find /usr /usr/local -name "PangolinConfig.cmake" 2>/dev/null | grep -q .; then
+    ok "Pangolin 已安装"
+    return 0
+  fi
+  local PDIR="$HOME/Pangolin"
+  if [[ ! -f "$PDIR/CMakeLists.txt" ]]; then
+    log "克隆 Pangolin (stevenlovegrove/Pangolin)..."
+    git clone https://github.com/stevenlovegrove/Pangolin.git "$PDIR"
+  fi
+  log "编译安装 Pangolin (10-20 分钟)..."
+  cd "$PDIR"
+  ./scripts/install_prerequisites.sh recommended 2>&1 | tail -3 || warn "prerequisites 部分失败(缺依赖可能导致编译失败)"
+  cmake -B build -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -3 || true
+  cmake --build build -j2 2>&1 | tail -5 || die "Pangolin 编译失败, 查看上方日志"
+  sudo cmake --install build 2>&1 | tail -3
+  ok "Pangolin 安装完成"
+}
+install_pangolin
 if [[ "$REBUILD" == "true" ]]; then
   warn "强制重编: 删除 build/"
   rm -rf build
