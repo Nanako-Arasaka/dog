@@ -114,6 +114,7 @@ install_pangolin() {
   ok "Pangolin 安装完成"
 }
 install_pangolin
+cd "$ORBSLAM_DIR"   # install_pangolin 内部 cd 到了 ~/Pangolin, 必须切回 ORB-SLAM3
 if [[ "$REBUILD" == "true" ]]; then
   warn "强制重编: 删除 build/"
   rm -rf build
