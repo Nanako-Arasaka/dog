@@ -62,9 +62,14 @@ fi
 
 # ---------- 2. ORB-SLAM3 本体 ----------
 log "===== 2/5 ORB-SLAM3 本体 ====="
-if [[ ! -d "$ORBSLAM_DIR/.git" ]]; then
-  log "克隆官方 ORB-SLAM3..."
-  git clone https://github.com/UZ-SLAMLab/ORB_SLAM3.git "$ORBSLAM_DIR"
+if [[ -f "$ORBSLAM_DIR/Thirdparty/Pangolin/CMakeLists.txt" && -d "$ORBSLAM_DIR/src" ]]; then
+  ok "ORB-SLAM3 源码已就绪(含 Thirdparty/Pangolin), 跳过 clone"
+elif [[ -d "$ORBSLAM_DIR/.git" ]]; then
+  log "ORB-SLAM3 已存在但缺子模块, 补拉 Pangolin..."
+  git -C "$ORBSLAM_DIR" submodule update --init --recursive
+else
+  log "克隆官方 ORB-SLAM3 (含 submodule, 较慢)..."
+  git clone --recursive https://github.com/UZ-SLAMLab/ORB_SLAM3.git "$ORBSLAM_DIR"
 fi
 cd "$ORBSLAM_DIR"
 if [[ "$REBUILD" == "true" ]]; then
@@ -96,7 +101,12 @@ if [[ "$SKIP_APT" != "true" ]]; then
   sudo apt install -y ros-humble-vision-opencv ros-humble-message-filters
 fi
 mkdir -p "$COLCON_WS/src"
-if [[ ! -d "$WRAPPER_DIR/.git" ]]; then
+if [[ -f "$WRAPPER_DIR/CMakeLists.txt" && -f "$WRAPPER_DIR/package.xml" ]]; then
+  ok "wrapper 源码已就绪, 跳过 clone"
+elif [[ -d "$WRAPPER_DIR/.git" ]]; then
+  log "更新 wrapper..."
+  git -C "$WRAPPER_DIR" pull --rebase || true
+else
   log "克隆 zang09/ORB_SLAM3_ROS2..."
   git clone https://github.com/zang09/ORB_SLAM3_ROS2.git "$WRAPPER_DIR"
 fi
