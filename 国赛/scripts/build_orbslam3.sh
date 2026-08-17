@@ -65,8 +65,21 @@ log "===== 2/5 ORB-SLAM3 本体 ====="
 if [[ -d "$ORBSLAM_DIR/Thirdparty/DBoW2" && -d "$ORBSLAM_DIR/src" ]]; then
   ok "ORB-SLAM3 源码已就绪(DBoW2/g2o/Sophus 齐全), 跳过 clone"
 else
-  log "克隆官方 ORB-SLAM3..."
-  git clone https://github.com/UZ-SLAMLab/ORB_SLAM3.git "$ORBSLAM_DIR"
+  log "克隆官方 ORB-SLAM3 (网络不稳会自动重试)..."
+  n=0
+  until git clone https://github.com/UZ-SLAMLab/ORB_SLAM3.git "$ORBSLAM_DIR" 2>/dev/null; do
+    n=$((n+1))
+    if [[ $n -ge 3 ]]; then
+      warn "clone 失败 3 次。建议从 Mac 打包拷贝源码, 更快更稳:"
+      warn "  Mac:  tar -czf ~/orbslam3_src.tar.gz --exclude='.git' --exclude='build' ~/ORB_SLAM3 ~/Pangolin"
+      warn "  Mac:  scp ~/orbslam3_src.tar.gz jetson@<IP>:/home/jetson/"
+      warn "  Jetson: cd ~ && tar -xzf orbslam3_src.tar.gz"
+      die "ORB-SLAM3 源码获取失败"
+    fi
+    warn "clone 失败(第 $n 次), 5 秒后重试..."
+    rm -rf "$ORBSLAM_DIR"
+    sleep 5
+  done
 fi
 cd "$ORBSLAM_DIR"
 
