@@ -122,9 +122,17 @@ if [[ -f build/libORB_SLAM3.so ]]; then
   ok "libORB_SLAM3.so 已存在, 跳过本体编译"
 else
   log "编译本体 (30-60 分钟, 日志 ~/orbslam_build.log)..."
-  sed -i 's/make -j4/make -j2/g' build.sh 2>/dev/null || true   # Jetson 内存小, 降并行度防 OOM
-  chmod +x build.sh
-  ./build.sh 2>&1 | tee ~/orbslam_build.log
+  if [[ -f build.sh ]]; then
+    sed -i 's/make -j4/make -j2/g' build.sh 2>/dev/null || true   # Jetson 内存小, 降并行度防 OOM
+    chmod +x build.sh
+    ./build.sh 2>&1 | tee ~/orbslam_build.log
+  else
+    warn "未找到 build.sh(打包时可能被排除), 改用纯 CMake 编译 Thirdparty + 本体..."
+    (cd Thirdparty/DBoW2 && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null && make -j2) || die "DBoW2 编译失败"
+    (cd Thirdparty/g2o   && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null && make -j2) || die "g2o 编译失败"
+    (cd Thirdparty/Sophus && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null && make -j2) || die "Sophus 编译失败"
+    mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null && make -j2 2>&1 | tee -a ~/orbslam_build.log && cd ..
+  fi
   [[ -f build/libORB_SLAM3.so ]] || die "本体编译失败, 查看 ~/orbslam_build.log"
   ok "libORB_SLAM3.so 编译完成"
 fi
