@@ -96,9 +96,20 @@ install_pangolin() {
   fi
   log "编译安装 Pangolin (10-20 分钟)..."
   cd "$PDIR"
-  ./scripts/install_prerequisites.sh recommended 2>&1 | tail -3 || warn "prerequisites 部分失败(缺依赖可能导致编译失败)"
-  cmake -B build -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -3 || true
-  cmake --build build -j2 2>&1 | tail -5 || die "Pangolin 编译失败, 查看上方日志"
+  # 最小依赖: 不跑 install_prerequisites.sh(会拉 ffmpeg/catch2/libc++ 大件, 慢网下 apt 卡死)
+  # 只装 Pangolin 核心所需小包; ORB-SLAM3 Viewer 用不到 ffmpeg 视频/测试
+  log "安装 Pangolin 最小依赖..."
+  sudo apt install -y --no-install-suggests --no-install-recommends \
+    libgl1-mesa-dev libegl1-mesa-dev libepoxy-dev libjpeg-dev libpng-dev \
+    libglew-dev libeigen3-dev libwayland-dev libxkbcommon-dev wayland-protocols \
+    ninja-build 2>&1 | tail -3 || warn "部分依赖安装失败(编译可能报缺头文件)"
+  cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_PANGOLIN_FFMPEG=OFF \
+    -DBUILD_PANGOLIN_VIDEO=OFF \
+    -DBUILD_PANGOLIN_OPENNI=OFF \
+    -DBUILD_TESTS=OFF \
+    -DBUILD_EXAMPLES=OFF 2>&1 | tail -5 || die "Pangolin cmake 配置失败"
+  cmake --build build -j2 2>&1 | tail -8 || die "Pangolin 编译失败, 查看上方日志"
   sudo cmake --install build 2>&1 | tail -3
   ok "Pangolin 安装完成"
 }
